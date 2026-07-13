@@ -57,7 +57,13 @@ the root of the recorded source repository, and the worker later executes it
 from a detached worktree of that repository. In the example above,
 `python train.py` means `$REPO/train.py`.
 
-Planning prints the experiment directory. The directory name follows this rule:
+Planning confirms where the experiment plan was created:
+
+```text
+Experiment plan created at: $REPO/reports/main/01234567_baseline_0
+```
+
+The directory name follows this rule:
 
 ```text
 REPORT_ROOT/{BRANCH_SLUG}/{COMMIT8}_{NAME_SLUG}_{COUNT}
@@ -83,6 +89,22 @@ runforge run "$REPO/reports/main/01234567_baseline_0"
 
 The worker returns the planned command's exit code. A non-zero command exit
 marks the experiment as failed but still leaves logs and metadata intact.
+
+To create the plan and run it immediately in the foreground, use `launch` with
+the same options accepted by `plan`:
+
+```bash
+runforge launch \
+  --name baseline \
+  --out-dir "$REPORT_ROOT" \
+  --source-path "$REPO" \
+  -- python train.py --output '{ARTIFACT_DIR}'
+```
+
+`launch` prints the created experiment directory before execution and returns
+the training command's exit code. The standalone `plan` and `run` commands
+remain available when planning and execution need to happen at different times
+or on different machines.
 
 ## Where To Save Results
 
