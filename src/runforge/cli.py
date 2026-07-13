@@ -22,9 +22,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             experiment = _plan_with_warnings(arguments)
             print(f"Experiment plan created at: {experiment}", flush=True)
             if arguments.subcommand == "launch":
-                return run_experiment(experiment)
+                return run_experiment(experiment, stream_output=arguments.stream_output)
             return 0
-        return run_experiment(arguments.experiment)
+        return run_experiment(arguments.experiment, stream_output=arguments.stream_output)
     except (PlanningError, WorkerError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -39,8 +39,10 @@ def _parser() -> argparse.ArgumentParser:
 
     launch = subparsers.add_parser("launch", help="create and immediately run one current-HEAD experiment")
     _add_planning_arguments(launch)
+    _add_stream_output_argument(launch)
 
     run = subparsers.add_parser("run", help="execute one explicit planned experiment directory")
+    _add_stream_output_argument(run)
     run.add_argument("experiment", type=Path)
     return parser
 
@@ -56,6 +58,14 @@ def _add_planning_arguments(parser: argparse.ArgumentParser) -> None:
         help="interpret one command string as an explicit shell pipeline",
     )
     parser.add_argument("command", nargs=argparse.REMAINDER, help="command after --")
+
+
+def _add_stream_output_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--stream-output",
+        action="store_true",
+        help="stream stdout and stderr to the console while preserving log files",
+    )
 
 
 def _plan_with_warnings(arguments: argparse.Namespace) -> Path:

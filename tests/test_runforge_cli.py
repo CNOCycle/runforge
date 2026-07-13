@@ -68,7 +68,8 @@ def test_cli_plans_and_runs_one_explicit_experiment(tmp_path, capsys):
     experiment = _planned_path(capsys.readouterr().out)
 
     assert experiment.is_dir()
-    assert main(["run", str(experiment)]) == 0
+    assert main(["run", "--stream-output", str(experiment)]) == 0
+    assert capsys.readouterr().out == "planned command ran\n"
 
 
 def test_cli_rejects_missing_command(capsys):
@@ -111,6 +112,7 @@ def test_cli_launches_a_new_experiment_immediately(tmp_path, capsys):
         main(
             [
                 "launch",
+                "--stream-output",
                 "--name",
                 "immediate",
                 "--out-dir",
@@ -124,7 +126,9 @@ def test_cli_launches_a_new_experiment_immediately(tmp_path, capsys):
         )
         == 0
     )
-    experiment = _planned_path(capsys.readouterr().out)
+    output = capsys.readouterr().out.splitlines()
+    experiment = _planned_path(output[0])
+    assert output[1:] == ["planned command ran"]
     status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
 
     assert status.state == "completed"

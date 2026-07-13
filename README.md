@@ -106,6 +106,22 @@ the training command's exit code. The standalone `plan` and `run` commands
 remain available when planning and execution need to happen at different times
 or on different machines.
 
+By default, command output is written only to `stdout.log` and `stderr.log`.
+Add `--stream-output` to `launch` or `run` to also view both streams in the
+console while preserving those log files:
+
+```bash
+runforge launch --stream-output \
+  --name baseline \
+  --source-path "$REPO" \
+  -- python train.py --output '{ARTIFACT_DIR}'
+
+runforge run --stream-output "$REPO/reports/main/01234567_baseline_0"
+```
+
+RunForge forwards output as the command emits it. Programs that buffer their
+own output must flush it or enable their own unbuffered mode for timely display.
+
 ## Where To Save Results
 
 Use a project-specific report root so experiment directories are easy to trace

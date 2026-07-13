@@ -5,10 +5,13 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import sys
 import tempfile
+import threading
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import BinaryIO, TextIO
 
 from runforge.experiment_schema import ExperimentConfiguration, ExperimentStatus
 from runforge.git_ops import GitOperationError, GitRepository
@@ -19,7 +22,7 @@ class WorkerError(RuntimeError):
     """Raised when one planned experiment cannot be prepared or executed."""
 
 
-def run_experiment(experiment_path: Path) -> int:
+def run_experiment(experiment_path: Path, *, stream_output: bool = False) -> int:
     """Run one explicit experiment directory and return its command exit code."""
     experiment = Path(experiment_path).expanduser().resolve()
     if not experiment.is_dir():
@@ -34,7 +37,7 @@ def run_experiment(experiment_path: Path) -> int:
 
     status = _save_status(experiment, replace(status, state="init", updated_at=_utc_now(), error=None))
     try:
-        return _execute(experiment, configuration, status)
+        return _execute(experiment, configuration, status, stream_output=stream_output)
     except WorkerError as error:
         _save_status(
             experiment,
@@ -50,7 +53,13 @@ def run_experiment(experiment_path: Path) -> int:
         raise failure from error
 
 
-def _execute(experiment: Path, configuration: ExperimentConfiguration, status: ExperimentStatus) -> int:
+def _execute(
+    experiment: Path,
+    configuration: ExperimentConfiguration,
+    status: ExperimentStatus,
+    *,
+    stream_output: bool,
+) -> int:
     try:
         repository = GitRepository.discover(configuration.source.repository)
     except GitOperationError as error:
@@ -73,7 +82,7 @@ def _execute(experiment: Path, configuration: ExperimentConfiguration, status: E
                     started_at=_utc_now(),
                 ),
             )
-            exit_code = _run_command(experiment, worktree, configuration)
+            exit_code = _run_command(experiment, worktree, configuration, stream_output=stream_output)
             final_state = "completed" if exit_code == 0 else "failed"
             error = None if exit_code == 0 else f"Command exited with status {exit_code}"
             _save_status(
@@ -120,7 +129,13 @@ def _apply_recorded_patch(
         raise WorkerError(str(error)) from error
 
 
-def _run_command(experiment: Path, worktree: Path, configuration: ExperimentConfiguration) -> int:
+def _run_command(
+    experiment: Path,
+    worktree: Path,
+    configuration: ExperimentConfiguration,
+    *,
+    stream_output: bool,
+) -> int:
     environment = os.environ.copy()
     environment.update(configuration.environment)
     environment["RUNFORGE_ARTIFACT_DIR"] = str(experiment / "artifacts")
@@ -131,22 +146,94 @@ def _run_command(experiment: Path, worktree: Path, configuration: ExperimentConf
     command = configuration.command.script if configuration.command.mode == "shell" else configuration.command.arguments
     with (experiment / "stdout.log").open("wb") as stdout, (experiment / "stderr.log").open("wb") as stderr:
         try:
-            result = subprocess.run(
-                command,
-                shell=configuration.command.mode == "shell",
-                cwd=worktree,
-                env=environment,
-                stdout=stdout,
-                stderr=stderr,
-                check=False,
-            )
+            if stream_output:
+                process = subprocess.Popen(
+                    command,
+                    shell=configuration.command.mode == "shell",
+                    cwd=worktree,
+                    env=environment,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                exit_code = _stream_process(process, stdout, stderr)
+            else:
+                exit_code = subprocess.run(
+                    command,
+                    shell=configuration.command.mode == "shell",
+                    cwd=worktree,
+                    env=environment,
+                    stdout=stdout,
+                    stderr=stderr,
+                    check=False,
+                ).returncode
         except OSError as error:
             raise WorkerError(f"Could not start command: {error}") from error
         stdout.flush()
         stderr.flush()
         os.fsync(stdout.fileno())
         os.fsync(stderr.fileno())
-    return result.returncode
+    return exit_code
+
+
+def _stream_process(
+    process: subprocess.Popen[bytes],
+    stdout_log: BinaryIO,
+    stderr_log: BinaryIO,
+) -> int:
+    assert process.stdout is not None
+    assert process.stderr is not None
+    errors: list[OSError | ValueError] = []
+    # Drain both pipes concurrently so neither child stream can block the other.
+    threads = [
+        threading.Thread(target=_pump_output, args=(process.stdout, stdout_log, sys.stdout, errors)),
+        threading.Thread(target=_pump_output, args=(process.stderr, stderr_log, sys.stderr, errors)),
+    ]
+    for thread in threads:
+        thread.start()
+    exit_code = process.wait()
+    for thread in threads:
+        thread.join()
+    if errors:
+        raise WorkerError(f"Could not write command output: {errors[0]}")
+    return exit_code
+
+
+def _pump_output(
+    source: BinaryIO,
+    log: BinaryIO,
+    console: TextIO,
+    errors: list[OSError | ValueError],
+) -> None:
+    log_available = True
+    console_available = True
+    try:
+        while chunk := source.read1(8192):
+            if log_available:
+                try:
+                    log.write(chunk)
+                    log.flush()
+                except (OSError, ValueError) as error:
+                    errors.append(error)
+                    log_available = False
+            if console_available:
+                try:
+                    _write_console(console, chunk)
+                except (OSError, ValueError):
+                    console_available = False
+    except (OSError, ValueError) as error:
+        errors.append(error)
+    finally:
+        source.close()
+
+
+def _write_console(console: TextIO, chunk: bytes) -> None:
+    buffer = getattr(console, "buffer", None)
+    if buffer is not None:
+        buffer.write(chunk)
+        buffer.flush()
+        return
+    console.write(chunk.decode("utf-8", errors="replace"))
+    console.flush()
 
 
 def _save_status(experiment: Path, status: ExperimentStatus) -> ExperimentStatus:
