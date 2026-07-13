@@ -1,0 +1,17 @@
+# Python bytecode and test/tool caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Build and packaging outputs.
+*.egg-info/
+build/
+dist/
+
+# Coverage reports.
+.coverage
+htmlcov/
+
+# Local experiment outputs. RunForge defaults to reports/.
+reports/
