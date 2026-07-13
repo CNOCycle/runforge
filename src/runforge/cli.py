@@ -1,4 +1,4 @@
-"""CLI wrappers for one current-HEAD plan and one explicit experiment run."""
+"""CLI wrappers for planning, running, or launching one experiment."""
 
 from __future__ import annotations
 
@@ -17,8 +17,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     arguments = parser.parse_args(argv)
     try:
-        if arguments.subcommand == "plan":
-            print(_plan(arguments))
+        if arguments.subcommand in {"plan", "launch"}:
+            experiment = _plan(arguments)
+            print(f"Experiment plan created at: {experiment}", flush=True)
+            if arguments.subcommand == "launch":
+                return run_experiment(experiment)
             return 0
         return run_experiment(arguments.experiment)
     except (PlanningError, WorkerError, ValueError) as error:
@@ -27,20 +30,31 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="runforge", description="Plan or run one Git-backed experiment.")
+    parser = argparse.ArgumentParser(prog="runforge", description="Plan, launch, or run one Git-backed experiment.")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     plan = subparsers.add_parser("plan", help="create one current-HEAD experiment directory without execution")
-    plan.add_argument("--name", default="exp")
-    plan.add_argument("--out-dir", type=Path, help="default: SOURCE_REPOSITORY/reports")
-    plan.add_argument("--source-path", type=Path, default=Path("."))
-    plan.add_argument("--env-file", type=Path)
-    plan.add_argument("--shell", action="store_true", help="interpret one command string as an explicit shell pipeline")
-    plan.add_argument("command", nargs=argparse.REMAINDER, help="command after --")
+    _add_planning_arguments(plan)
+
+    launch = subparsers.add_parser("launch", help="create and immediately run one current-HEAD experiment")
+    _add_planning_arguments(launch)
 
     run = subparsers.add_parser("run", help="execute one explicit planned experiment directory")
     run.add_argument("experiment", type=Path)
     return parser
+
+
+def _add_planning_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--name", default="exp")
+    parser.add_argument("--out-dir", type=Path, help="default: SOURCE_REPOSITORY/reports")
+    parser.add_argument("--source-path", type=Path, default=Path("."))
+    parser.add_argument("--env-file", type=Path)
+    parser.add_argument(
+        "--shell",
+        action="store_true",
+        help="interpret one command string as an explicit shell pipeline",
+    )
+    parser.add_argument("command", nargs=argparse.REMAINDER, help="command after --")
 
 
 def _plan(arguments: argparse.Namespace) -> Path:
