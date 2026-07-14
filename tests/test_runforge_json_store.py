@@ -1,4 +1,4 @@
-"""Focused tests for Stage 1A.2 generic atomic JSON-object persistence."""
+"""Tests for the generic atomic JSON-object persistence."""
 
 from __future__ import annotations
 

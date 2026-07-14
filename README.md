@@ -6,17 +6,17 @@ designed for the common research problem where an experiment is planned on one
 machine, executed later on another worker, and still needs to reflect the exact
 source state the planner intended.
 
-The current first-class workflow is Git-backed. Planning records the current
-`HEAD`, branch, tracked diff, rendered command, and explicit environment
-overrides without executing anything. Running later recreates that source state
-in a detached worktree, applies the recorded patch, executes the command, and
-writes logs, status, and artifacts beside the metadata.
+The first-class workflow is Git-backed. A plan can either capture the current
+`HEAD` plus tracked changes or use an explicit pinned commit/ref and optional
+external patch. Pinned sources can also expand a deterministic parameter matrix
+into independent plans. Planning never executes the experiment command.
+Running later reconstructs the normalized source in a detached worktree.
 
-RunForge is organized around two roles. A **planner** creates one immutable
-experiment directory containing the source identity, rendered command,
-environment overrides, initial status, and reproduction helpers. A **worker**
-takes one explicit experiment directory, reconstructs the recorded source state,
-runs the command, and updates status, logs, and artifacts. 
+RunForge is organized around two roles. A **planner** creates immutable
+experiment directories containing source identity, rendered commands,
+parameters, environment overrides, initial status, and reproduction helpers. A
+**worker** reconstructs one explicit plan, runs it, and updates status, logs, and
+artifacts.
 
 ## Install
 
@@ -122,6 +122,58 @@ runforge run --stream-output "$REPO/reports/main/01234567_baseline_0"
 RunForge forwards output as the command emits it. Programs that buffer their
 own output must flush it or enable their own unbuffered mode for timely display.
 
+## Pinned Git Source
+
+Use pinned mode when the intended source is an explicit commit or ref rather
+than the repository's current checkout. `--patch` is optional:
+
+```bash
+runforge plan \
+  --name release-baseline \
+  --out-dir "$REPORT_ROOT" \
+  --source-path "$REPO" \
+  --source-mode pinned-git \
+  --commit v1.2.0 \
+  --patch /path/to/change.patch \
+  -- python train.py --output '{ARTIFACT_DIR}'
+```
+
+RunForge resolves the ref to a full commit, validates the captured patch bytes
+in a detached worktree at that commit, and stores the patch plus its SHA-256 in
+the plan. Pinned plans are placed under the `pinned/` report branch slug.
+
+## Parameter Matrices
+
+Matrix planning requires one pinned source and a JSON object whose values are
+non-empty arrays of strings, numbers, or booleans:
+
+```json
+{
+  "LR": [0.1, 0.01],
+  "SEED": [1, 2]
+}
+```
+
+```bash
+runforge matrix \
+  --name learning-rate-sweep \
+  --matrix-file matrix.json \
+  --out-dir "$REPORT_ROOT" \
+  --source-path "$REPO" \
+  --commit v1.2.0 \
+  -- python train.py --lr '{LR}' --seed '{SEED}' --output '{ARTIFACT_DIR}'
+```
+
+`matrix` uses pinned-Git mode by default. Parameter names are sorted to define
+axis order, while each array's value order is preserved. Every Cartesian
+combination receives its own normal experiment directory and a rendered command;
+the selected values are also stored in `config.json` under `parameters`. The CLI
+prints every created directory.
+
+Matrix planning resolves and validates the source once, validates every
+combination before publication, and does not execute any experiment. Use
+`runforge run EXPERIMENT_DIRECTORY` for each resulting plan.
+
 ## Where To Save Results
 
 Use a project-specific report root so experiment directories are easy to trace
@@ -184,9 +236,9 @@ environment is not serialized.
 REPORT_ROOT/
   BRANCH_SLUG/
     COMMIT8_NAME_SLUG_COUNT/
-      config.json      # immutable rendered command and recorded Git source
+      config.json      # immutable command, parameters, environment, and source
       status.json      # mutable lifecycle/result state
-      git.patch        # present when tracked changes differ from HEAD
+      git.patch        # present when captured source includes a patch
       cmd.sh           # rendered command for inspection
       stdout.log
       stderr.log
@@ -197,11 +249,15 @@ The lifecycle is `created -> init -> inprogress -> completed|failed`.
 
 ## Reproducibility Boundary
 
-At planning time RunForge records the full current `HEAD` commit and branch
-name, captures staged and unstaged tracked changes as a binary Git patch, and
-lists untracked non-ignored paths. Untracked file contents are not copied. The
-planner emits a warning when they are present, so do not make the planned command
-depend on them.
+In current-HEAD mode RunForge records the full commit and branch, captures staged
+and unstaged tracked changes as a binary Git patch, and lists untracked
+non-ignored paths. Untracked file contents are not copied. The planner warns
+when they are present, so do not make the command depend on them.
+
+In pinned mode RunForge resolves only the supplied repository and commit/ref. It
+does not infer source from the current checkout. An optional external patch is
+captured, hashed, and checked against a detached worktree at the resolved commit.
+Matrix plans all share that same resolved commit and patch identity.
 
 At run time the worker creates a detached worktree at the recorded commit,
 checks the stored patch SHA-256, applies the patch, then runs the recorded

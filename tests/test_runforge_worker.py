@@ -1,4 +1,4 @@
-"""Focused tests for Stage 1A.6 explicit experiment execution."""
+"""Tests for the RunForge experiment execution worker."""
 
 from __future__ import annotations
 

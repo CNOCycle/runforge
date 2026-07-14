@@ -1,4 +1,4 @@
-"""Focused tests for Stage 1A.5 current-HEAD experiment planning."""
+"""Tests for the RunForge experiment planner."""
 
 from __future__ import annotations
 

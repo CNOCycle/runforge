@@ -1,4 +1,4 @@
-"""Focused tests for Stage 1C deterministic matrix expansion."""
+"""Tests for the deterministic parameter matrix expansion."""
 
 from __future__ import annotations
 
