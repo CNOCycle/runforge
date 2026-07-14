@@ -1,4 +1,4 @@
-"""Focused tests for Stage 1A.1 standalone Git operations."""
+"""Tests for the standalone Git operations."""
 
 from __future__ import annotations
 

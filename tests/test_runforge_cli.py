@@ -1,4 +1,4 @@
-"""Focused tests for Stage 1A.7 CLI wrappers."""
+"""Tests for the RunForge command-line interface."""
 
 from __future__ import annotations
 

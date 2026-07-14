@@ -1,4 +1,4 @@
-"""Focused tests for Stage 1A.4 command and experiment schemas."""
+"""Tests for the experiment command and configuration schemas."""
 
 from __future__ import annotations
 

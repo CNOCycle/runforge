@@ -1,4 +1,4 @@
-"""Focused tests for Stage 1A.3 current-HEAD Git source metadata."""
+"""Tests for the Git source metadata schemas."""
 
 from __future__ import annotations
 
