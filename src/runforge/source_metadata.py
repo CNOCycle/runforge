@@ -1,4 +1,4 @@
-"""Versioned current-HEAD Git source metadata for planned experiments."""
+"""Caller-facing and normalized Git source metadata."""
 
 from __future__ import annotations
 
@@ -20,8 +20,54 @@ class SourceMetadataError(ValueError):
 
 
 @dataclass(frozen=True)
+class PinnedGitSource:
+    """An explicit repository, commit/ref, and optional patch supplied by a caller."""
+
+    repository: Path
+    commit: str
+    patch: Path | None = None
+
+    def __post_init__(self) -> None:
+        repository = Path(self.repository).expanduser().resolve()
+        object.__setattr__(self, "repository", repository)
+        require_text(self.commit, "commit", SourceMetadataError)
+        if self.patch is not None:
+            object.__setattr__(self, "patch", Path(self.patch).expanduser().resolve())
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the documented caller-facing pinned-source descriptor."""
+        return {
+            "mode": "pinned-git",
+            "repository": str(self.repository),
+            "commit": self.commit,
+            "patch": str(self.patch) if self.patch is not None else None,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Any) -> PinnedGitSource:
+        """Decode one exact pinned-source descriptor."""
+        data = require_object(value, "pinned Git source", SourceMetadataError)
+        require_exact_fields(
+            data,
+            {"mode", "repository", "commit", "patch"},
+            "pinned Git source",
+            SourceMetadataError,
+        )
+        if data["mode"] != "pinned-git":
+            raise SourceMetadataError("Pinned Git source mode must be pinned-git")
+        patch = data["patch"]
+        if patch is not None:
+            patch = Path(require_text(patch, "patch", SourceMetadataError))
+        return cls(
+            repository=Path(require_text(data["repository"], "repository", SourceMetadataError)),
+            commit=require_text(data["commit"], "commit", SourceMetadataError),
+            patch=patch,
+        )
+
+
+@dataclass(frozen=True)
 class GitSource:
-    """Current-HEAD Git identity persisted independently from experiment details."""
+    """Normalized Git identity persisted independently from experiment details."""
 
     repository: Path
     commit: str

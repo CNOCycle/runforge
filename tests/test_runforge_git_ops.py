@@ -59,6 +59,7 @@ def test_discover_rejects_non_git_path_and_repository_without_head(tmp_path):
     empty_repository = tmp_path / "empty-repository"
     empty_repository.mkdir()
     _git(empty_repository, "init")
+    assert GitRepository.locate(empty_repository).root == empty_repository.resolve()
     with pytest.raises(GitOperationError, match="resolve Git commit"):
         GitRepository.discover(empty_repository)
 
@@ -88,6 +89,7 @@ def test_worktree_patch_operations_and_forced_cleanup(tmp_path):
     patch_path = tmp_path / "change.patch"
     patch_path.write_bytes(repository.tracked_patch())
     _git(repository_path, "checkout", "--", "staged.txt")
+    repository.check_patch_at_commit(head.commit, patch_path.read_bytes())
     worktree_path = tmp_path / "worktree"
 
     worktree = repository.create_detached_worktree(worktree_path, head.commit)

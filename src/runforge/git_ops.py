@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,13 +27,18 @@ class GitRepository:
     root: Path
 
     @classmethod
-    def discover(cls, path: Path) -> GitRepository:
-        """Find the Git repository containing *path* and require a valid HEAD."""
+    def locate(cls, path: Path) -> GitRepository:
+        """Find the Git repository containing *path* without consulting HEAD."""
         requested_path = Path(path).expanduser().resolve()
         if not requested_path.exists():
             raise GitOperationError(f"Git source path does not exist: {requested_path}")
         root = cls._text_at(requested_path, ["rev-parse", "--show-toplevel"], "find Git repository")
-        repository = cls(Path(root).resolve())
+        return cls(Path(root).resolve())
+
+    @classmethod
+    def discover(cls, path: Path) -> GitRepository:
+        """Find the Git repository containing *path* and require a valid HEAD."""
+        repository = cls.locate(path)
         repository.head()
         return repository
 
@@ -90,6 +96,22 @@ class GitRepository:
             ["apply", "--whitespace=nowarn", str(patch_path)],
             "apply Git patch",
         )
+
+    def check_patch_at_commit(self, commit: str, patch: bytes) -> None:
+        """Check captured patch bytes in a temporary worktree at *commit*."""
+        with tempfile.TemporaryDirectory(prefix="runforge-patch-check-") as temporary_root:
+            patch_path = Path(temporary_root) / "git.patch"
+            try:
+                patch_path.write_bytes(patch)
+            except OSError as error:
+                raise GitOperationError(f"Could not stage Git patch for validation: {error}") from error
+            worktree = Path(temporary_root) / "worktree"
+            try:
+                self.create_detached_worktree(worktree, commit)
+                self.check_patch(worktree, patch_path)
+            finally:
+                if worktree.exists():
+                    self.remove_worktree(worktree)
 
     def _text(self, arguments: list[str], operation: str) -> str:
         return self._run(arguments, operation=operation).stdout.decode("utf-8", errors="replace").strip()
