@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 from runforge.source_metadata import GitSource
 
 
+_PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")
 EXPERIMENT_SCHEMA_VERSION = 1
 _STATUS_STATES = frozenset({"created", "init", "inprogress", "completed", "failed"})
 
@@ -91,12 +93,10 @@ class ExperimentCommand:
         for key, value in values.items():
             if not isinstance(key, str) or not key or not isinstance(value, str):
                 raise ExperimentSchemaError("placeholder values must map non-empty strings to strings")
-            replacements["{" + key + "}"] = value
+            replacements[key] = value
 
         def render(text: str) -> str:
-            for placeholder, replacement in replacements.items():
-                text = text.replace(placeholder, replacement)
-            return text
+            return _PLACEHOLDER_PATTERN.sub(lambda match: replacements.get(match.group(1), match.group(0)), text)
 
         if self.mode == "argv":
             return ExperimentCommand.argv(tuple(render(argument) for argument in self.arguments))
