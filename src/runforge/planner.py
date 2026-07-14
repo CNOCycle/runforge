@@ -11,13 +11,13 @@ import uuid
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 
 from runforge.experiment_schema import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.git_ops import GitOperationError, GitRepository
 from runforge.json_store import save_json_object
 from runforge.source_metadata import GitSource
+from runforge.time_utils import utc_now
 
 
 _SLUG_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
@@ -76,7 +76,7 @@ def plan_experiment(request: PlanRequest) -> Path:
         patch_sha256=patch_sha256,
         untracked_files=tuple(untracked),
     )
-    timestamp = _utc_now()
+    timestamp = utc_now()
     configuration = ExperimentConfiguration(
         experiment_id=destination.name,
         name=request.name,
@@ -138,7 +138,3 @@ def _write_command_file(path: Path, command: ExperimentCommand) -> None:
 def _slug(value: str, fallback: str) -> str:
     slug = _SLUG_PATTERN.sub("-", value.strip()).strip("-._")
     return (slug or fallback)[:64]
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

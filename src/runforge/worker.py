@@ -9,13 +9,13 @@ import sys
 import tempfile
 import threading
 from dataclasses import replace
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, TextIO
 
 from runforge.experiment_schema import ExperimentConfiguration, ExperimentStatus
 from runforge.git_ops import GitOperationError, GitRepository
 from runforge.json_store import load_json_object, save_json_object
+from runforge.time_utils import utc_now
 
 
 class WorkerError(RuntimeError):
@@ -35,20 +35,20 @@ def run_experiment(experiment_path: Path, *, stream_output: bool = False) -> int
     if status.state not in {"created", "init"}:
         raise WorkerError(f"Experiment is not runnable from state {status.state!r}")
 
-    status = _save_status(experiment, replace(status, state="init", updated_at=_utc_now(), error=None))
+    status = _save_status(experiment, replace(status, state="init", updated_at=utc_now(), error=None))
     try:
         return _execute(experiment, configuration, status, stream_output=stream_output)
     except WorkerError as error:
         _save_status(
             experiment,
-            replace(status, state="failed", updated_at=_utc_now(), finished_at=_utc_now(), error=str(error)),
+            replace(status, state="failed", updated_at=utc_now(), finished_at=utc_now(), error=str(error)),
         )
         raise
     except OSError as error:
         failure = WorkerError(str(error))
         _save_status(
             experiment,
-            replace(status, state="failed", updated_at=_utc_now(), finished_at=_utc_now(), error=str(failure)),
+            replace(status, state="failed", updated_at=utc_now(), finished_at=utc_now(), error=str(failure)),
         )
         raise failure from error
 
@@ -78,8 +78,8 @@ def _execute(
                     status,
                     state="inprogress",
                     attempt=status.attempt + 1,
-                    updated_at=_utc_now(),
-                    started_at=_utc_now(),
+                    updated_at=utc_now(),
+                    started_at=utc_now(),
                 ),
             )
             exit_code = _run_command(experiment, worktree, configuration, stream_output=stream_output)
@@ -90,8 +90,8 @@ def _execute(
                 replace(
                     active_status,
                     state=final_state,
-                    updated_at=_utc_now(),
-                    finished_at=_utc_now(),
+                    updated_at=utc_now(),
+                    finished_at=utc_now(),
                     exit_code=exit_code,
                     error=error,
                 ),
@@ -239,7 +239,3 @@ def _write_console(console: TextIO, chunk: bytes) -> None:
 def _save_status(experiment: Path, status: ExperimentStatus) -> ExperimentStatus:
     save_json_object(experiment / "status.json", status.to_dict())
     return status
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
