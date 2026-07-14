@@ -89,7 +89,8 @@ def plan_experiment(request: PlanRequest) -> Path:
     _publish(destination, configuration, status, patch)
     if untracked:
         warnings.warn(
-            "Planned Git source has untracked files that are not included in git.patch: " + ", ".join(untracked),
+            "Planned Git source has untracked files that are not included in git.patch:\n"
+            + "\n".join(f"  {path}" for path in untracked),
             stacklevel=2,
         )
     return destination

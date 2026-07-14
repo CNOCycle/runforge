@@ -76,6 +76,34 @@ def test_cli_rejects_missing_command(capsys):
     assert "No command provided" in capsys.readouterr().err
 
 
+def test_cli_formats_untracked_warnings_without_python_source_lines(tmp_path, capsys):
+    repository = _repository(tmp_path)
+    (repository / "b").write_text("untracked\n", encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "plan",
+                "--out-dir",
+                str(tmp_path / "reports"),
+                "--source-path",
+                str(repository),
+                "--",
+                "python",
+                "train.py",
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+
+    assert captured.err.splitlines() == [
+        "warning: Planned Git source has untracked files that are not included in git.patch:",
+        "  b",
+    ]
+    assert "return plan_experiment(" not in captured.err
+
+
 def test_cli_launches_a_new_experiment_immediately(tmp_path, capsys):
     repository = _repository(tmp_path)
 

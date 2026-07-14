@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import warnings
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -18,7 +19,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         if arguments.subcommand in {"plan", "launch"}:
-            experiment = _plan(arguments)
+            experiment = _plan_with_warnings(arguments)
             print(f"Experiment plan created at: {experiment}", flush=True)
             if arguments.subcommand == "launch":
                 return run_experiment(experiment)
@@ -55,6 +56,15 @@ def _add_planning_arguments(parser: argparse.ArgumentParser) -> None:
         help="interpret one command string as an explicit shell pipeline",
     )
     parser.add_argument("command", nargs=argparse.REMAINDER, help="command after --")
+
+
+def _plan_with_warnings(arguments: argparse.Namespace) -> Path:
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        experiment = _plan(arguments)
+    for captured_warning in captured:
+        print(f"warning: {captured_warning.message}", file=sys.stderr)
+    return experiment
 
 
 def _plan(arguments: argparse.Namespace) -> Path:

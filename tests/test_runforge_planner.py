@@ -40,6 +40,8 @@ def test_planner_captures_current_head_metadata_and_never_executes_command(tmp_p
     marker = tmp_path / "executed.txt"
     (repository / "train.py").write_text("VALUE = 2\n", encoding="utf-8")
     (repository / "untracked.txt").write_text("not captured\n", encoding="utf-8")
+    (repository / "notes").mkdir()
+    (repository / "notes" / "second.txt").write_text("also not captured\n", encoding="utf-8")
     request = PlanRequest(
         name="minor revision",
         command=ExperimentCommand.argv(
@@ -50,14 +52,19 @@ def test_planner_captures_current_head_metadata_and_never_executes_command(tmp_p
         environment={"RUN_MODE": "ablation"},
     )
 
-    with pytest.warns(UserWarning, match="untracked files"):
+    with pytest.warns(UserWarning, match="untracked files") as warning:
         experiment = plan_experiment(request)
 
     configuration = ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json"))
     status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    assert str(warning[0].message).splitlines() == [
+        "Planned Git source has untracked files that are not included in git.patch:",
+        "  notes/second.txt",
+        "  untracked.txt",
+    ]
     assert not marker.exists()
     assert configuration.source.commit == _git(repository, "rev-parse", "HEAD")
-    assert configuration.source.untracked_files == ("untracked.txt",)
+    assert configuration.source.untracked_files == ("notes/second.txt", "untracked.txt")
     assert configuration.command.arguments[-1] == f"--out={experiment / 'artifacts'}"
     assert configuration.environment == {"RUN_MODE": "ablation"}
     assert status.state == "created"
