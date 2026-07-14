@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from runforge.experiment_schema import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.json_store import load_json_object
 from runforge.planner import PlanningError, PlanRequest, plan_experiment
+from runforge.source_metadata import PinnedGitSource
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -110,6 +112,39 @@ def test_planner_allocates_distinct_experiment_directories_and_persists_shell_pi
     assert first_configuration.command.script is not None
     assert "{ARTIFACT_DIR}" not in first_configuration.command.script
     assert str(first / "artifacts") in first_configuration.command.script
+
+
+def test_planner_resolves_copies_and_hashes_patch_for_pinned_commit(tmp_path):
+    repository = _repository(tmp_path)
+    pinned_commit = _git(repository, "rev-parse", "HEAD")
+    train = repository / "train.py"
+    train.write_text("VALUE = 2\n", encoding="utf-8")
+    patch_path = tmp_path / "change.patch"
+    patch_path.write_text(_git(repository, "diff", "--binary", "HEAD", "--") + "\n", encoding="utf-8")
+    _git(repository, "add", "train.py")
+    _git(repository, "commit", "-m", "advance checkout")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="pinned patch",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            output_root=tmp_path / "reports",
+            source=PinnedGitSource(
+                repository=repository,
+                commit=pinned_commit,
+                patch=patch_path,
+            ),
+        )
+    )
+
+    configuration = ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json"))
+    captured_patch = (experiment / "git.patch").read_bytes()
+
+    assert configuration.source.commit == pinned_commit
+    assert configuration.source.branch == "pinned"
+    assert configuration.source.untracked_files == ()
+    assert configuration.source.patch_file == "git.patch"
+    assert configuration.source.patch_sha256 == hashlib.sha256(captured_patch).hexdigest()
+    assert captured_patch == patch_path.read_bytes()
 
 
 def test_planner_reports_invalid_non_git_source_path(tmp_path):

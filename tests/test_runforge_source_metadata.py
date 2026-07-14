@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from runforge.source_metadata import GitSource, SourceMetadataError
+from runforge.source_metadata import GitSource, PinnedGitSource, SourceMetadataError
 
 
 def test_git_source_round_trip_preserves_commit_branch_patch_and_untracked_files(tmp_path):
@@ -60,3 +60,24 @@ def test_git_source_rejects_unknown_or_unsupported_serialized_metadata(tmp_path)
     payload["schema_version"] = 2
     with pytest.raises(SourceMetadataError, match="Unsupported Git source schema version"):
         GitSource.from_dict(payload)
+
+
+def test_pinned_git_source_round_trip_preserves_caller_descriptor(tmp_path):
+    descriptor = PinnedGitSource(
+        repository=tmp_path,
+        commit="release-candidate",
+        patch=tmp_path / "change.patch",
+    )
+
+    payload = descriptor.to_dict()
+
+    assert PinnedGitSource.from_dict(payload) == descriptor
+    assert payload == {
+        "mode": "pinned-git",
+        "repository": str(tmp_path.resolve()),
+        "commit": "release-candidate",
+        "patch": str((tmp_path / "change.patch").resolve()),
+    }
+    payload["mode"] = "current-head"
+    with pytest.raises(SourceMetadataError, match="mode must be pinned-git"):
+        PinnedGitSource.from_dict(payload)
