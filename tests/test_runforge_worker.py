@@ -5,9 +5,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from runforge.experiment_schema import ExperimentCommand, ExperimentStatus
+from runforge.experiment_schema import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.json_store import load_json_object
 from runforge.planner import PlanRequest, plan_experiment
+from runforge.source_metadata import PinnedGitSource
 from runforge.worker import run_experiment
 
 
@@ -67,6 +68,38 @@ def test_worker_executes_recorded_commit_and_patch_then_cleans_worktree(tmp_path
     assert (experiment / "stdout.log").is_file()
     assert (experiment / "stderr.log").is_file()
     assert "runforge-worker-" not in _git(repository, "worktree", "list", "--porcelain")
+
+
+def test_worker_executes_pinned_commit_after_current_checkout_advances(tmp_path):
+    repository = _repository(
+        tmp_path,
+        (
+            "from pathlib import Path\n"
+            "import os\n"
+            "Path(os.environ['RUNFORGE_ARTIFACT_DIR']).joinpath('result.txt').write_text('first')\n"
+        ),
+    )
+    first_commit = _git(repository, "rev-parse", "HEAD")
+    train = repository / "train.py"
+    train.write_text(train.read_text(encoding="utf-8").replace("'first'", "'second'"), encoding="utf-8")
+    _git(repository, "add", "train.py")
+    _git(repository, "commit", "-m", "second")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="pinned",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            output_root=tmp_path / "reports",
+            source=PinnedGitSource(repository=repository, commit=first_commit),
+        )
+    )
+
+    configuration = ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json"))
+
+    assert experiment.parent.name == "pinned"
+    assert configuration.source.commit == first_commit
+    assert configuration.source.branch == "pinned"
+    assert run_experiment(experiment) == 0
+    assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "first"
 
 
 def test_worker_records_nonzero_command_exit(tmp_path):

@@ -61,7 +61,7 @@ def _execute(
     stream_output: bool,
 ) -> int:
     try:
-        repository = GitRepository.discover(configuration.source.repository)
+        repository = GitRepository.locate(configuration.source.repository)
     except GitOperationError as error:
         raise WorkerError(str(error)) from error
 

@@ -1,8 +1,7 @@
-"""Current-HEAD single-experiment planning without command execution."""
+"""Git-backed single-experiment planning without command execution."""
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import shlex
@@ -14,9 +13,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from runforge.experiment_schema import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
-from runforge.git_ops import GitOperationError, GitRepository
 from runforge.json_store import save_json_object
-from runforge.source_metadata import GitSource
+from runforge.source_metadata import PinnedGitSource
+from runforge.source_resolver import (
+    ResolvedGitSource,
+    SourceResolutionError,
+    resolve_current_git_source,
+    resolve_pinned_git_source,
+)
 from runforge.time_utils import utc_now
 
 
@@ -31,12 +35,13 @@ class PlanningError(RuntimeError):
 
 @dataclass(frozen=True)
 class PlanRequest:
-    """Input for one current-HEAD experiment plan."""
+    """Input for one current-HEAD or explicitly pinned experiment plan."""
 
     name: str
     command: ExperimentCommand
     output_root: Path | None = None
     source_path: Path = Path(".")
+    source: PinnedGitSource | None = None
     environment: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -48,6 +53,8 @@ class PlanRequest:
             object.__setattr__(self, "output_root", Path(self.output_root))
         if not isinstance(self.source_path, Path):
             object.__setattr__(self, "source_path", Path(self.source_path))
+        if self.source is not None and not isinstance(self.source, PinnedGitSource):
+            raise PlanningError("source must be PinnedGitSource metadata")
         environment = dict(self.environment)
         if not all(isinstance(key, str) and key and isinstance(value, str) for key, value in environment.items()):
             raise PlanningError("environment must map non-empty strings to strings")
@@ -55,27 +62,23 @@ class PlanRequest:
 
 
 def plan_experiment(request: PlanRequest) -> Path:
-    """Create one self-contained current-HEAD experiment directory without execution."""
+    """Create one self-contained current-HEAD or pinned experiment plan."""
     try:
-        repository = GitRepository.discover(request.source_path)
-        head = repository.head()
-        patch = repository.tracked_patch()
-        untracked = repository.untracked_files()
-    except GitOperationError as error:
+        if request.source is None:
+            resolved = resolve_current_git_source(request.source_path)
+        else:
+            resolved = resolve_pinned_git_source(request.source)
+    except SourceResolutionError as error:
         raise PlanningError(str(error)) from error
+    return _plan_resolved_experiment(request, resolved)
 
-    output_root = request.output_root or repository.root / _DEFAULT_OUTPUT_ROOT
-    destination = _destination(output_root, head.branch, head.commit, request.name)
+
+def _plan_resolved_experiment(request: PlanRequest, resolved: ResolvedGitSource) -> Path:
+    """Publish one plan from source metadata that has already been resolved."""
+    source = resolved.source
+    output_root = request.output_root or resolved.repository.root / _DEFAULT_OUTPUT_ROOT
+    destination = _destination(output_root, source.branch, source.commit, request.name)
     rendered_command = request.command.render_placeholders({"ARTIFACT_DIR": str(destination / "artifacts")})
-    patch_sha256 = hashlib.sha256(patch).hexdigest() if patch else None
-    source = GitSource(
-        repository=repository.root,
-        commit=head.commit,
-        branch=head.branch,
-        patch_file="git.patch" if patch else None,
-        patch_sha256=patch_sha256,
-        untracked_files=tuple(untracked),
-    )
     timestamp = utc_now()
     configuration = ExperimentConfiguration(
         experiment_id=destination.name,
@@ -86,11 +89,11 @@ def plan_experiment(request: PlanRequest) -> Path:
         created_at=timestamp,
     )
     status = ExperimentStatus(state="created", attempt=0, updated_at=timestamp)
-    _publish(destination, configuration, status, patch)
-    if untracked:
+    _publish(destination, configuration, status, resolved.patch)
+    if source.untracked_files:
         warnings.warn(
             "Planned Git source has untracked files that are not included in git.patch:\n"
-            + "\n".join(f"  {path}" for path in untracked),
+            + "\n".join(f"  {path}" for path in source.untracked_files),
             stacklevel=2,
         )
     return destination
