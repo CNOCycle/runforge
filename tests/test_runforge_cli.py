@@ -7,10 +7,11 @@ from pathlib import Path
 
 from runforge.cli import main
 from runforge.experiment_schema import ExperimentConfiguration, ExperimentStatus
-from runforge.json_store import load_json_object
+from runforge.json_store import load_json_object, save_json_object
 
 
 CLI_ERROR_EXIT = 2
+MATRIX_PLAN_COUNT = 4
 PLAN_CREATED_PREFIX = "Experiment plan created at: "
 
 
@@ -137,6 +138,52 @@ def test_cli_plans_an_explicit_pinned_git_source(tmp_path, capsys):
 
     assert configuration.source.commit == pinned_commit
     assert configuration.source.branch == "pinned"
+
+
+def test_cli_creates_a_pinned_cartesian_matrix(tmp_path, capsys):
+    repository = _repository(tmp_path)
+    matrix_file = tmp_path / "matrix.json"
+    save_json_object(
+        matrix_file,
+        {"SEED": [1, 2], "LR": [0.1, 0.01]},
+    )
+
+    assert (
+        main(
+            [
+                "matrix",
+                "--matrix-file",
+                str(matrix_file),
+                "--commit",
+                "HEAD",
+                "--source-path",
+                str(repository),
+                "--out-dir",
+                str(tmp_path / "reports"),
+                "--",
+                "python",
+                "train.py",
+                "--lr={LR}",
+                "--seed={SEED}",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out.splitlines()
+
+    assert output[0] == f"Experiment plans created ({MATRIX_PLAN_COUNT}):"
+    experiments = tuple(Path(line.strip()) for line in output[1:])
+    assert len(experiments) == MATRIX_PLAN_COUNT
+    configurations = [
+        ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json")) for experiment in experiments
+    ]
+    assert [configuration.parameters for configuration in configurations] == [
+        {"LR": "0.1", "SEED": "1"},
+        {"LR": "0.1", "SEED": "2"},
+        {"LR": "0.01", "SEED": "1"},
+        {"LR": "0.01", "SEED": "2"},
+    ]
+    assert all(experiment.is_dir() for experiment in experiments)
 
 
 def test_cli_launches_a_new_experiment_immediately(tmp_path, capsys):

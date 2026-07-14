@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from runforge.schema_utils import require_exact_fields, require_object, require_string_mapping, require_text
@@ -13,6 +13,7 @@ from runforge.source_metadata import GitSource
 
 _PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")
 EXPERIMENT_SCHEMA_VERSION = 1
+_CONFIGURATION_SCHEMA_VERSION = 2
 _STATUS_STATES = frozenset({"created", "init", "inprogress", "completed", "failed"})
 
 
@@ -115,6 +116,7 @@ class ExperimentConfiguration:
     environment: Mapping[str, str]
     source: GitSource
     created_at: str
+    parameters: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         require_text(self.experiment_id, "experiment_id", ExperimentSchemaError)
@@ -126,34 +128,41 @@ class ExperimentConfiguration:
         if not isinstance(self.source, GitSource):
             raise ExperimentSchemaError("source must be GitSource metadata")
         require_text(self.created_at, "created_at", ExperimentSchemaError)
+        parameters = require_string_mapping(self.parameters, "parameters", ExperimentSchemaError)
+        object.__setattr__(self, "parameters", parameters)
 
     def to_dict(self) -> dict[str, Any]:
         """Return the versioned immutable configuration object."""
         return {
             "kind": "runforge_experiment_configuration",
-            "schema_version": EXPERIMENT_SCHEMA_VERSION,
+            "schema_version": _CONFIGURATION_SCHEMA_VERSION,
             "experiment_id": self.experiment_id,
             "name": self.name,
             "command": self.command.to_dict(),
             "environment": dict(self.environment),
             "source": self.source.to_dict(),
             "created_at": self.created_at,
+            "parameters": dict(self.parameters),
         }
 
     @classmethod
     def from_dict(cls, value: Any) -> ExperimentConfiguration:
         """Decode one exact supported configuration object."""
         data = require_object(value, "configuration", ExperimentSchemaError)
+        schema_version = data.get("schema_version")
+        if schema_version not in {EXPERIMENT_SCHEMA_VERSION, _CONFIGURATION_SCHEMA_VERSION}:
+            raise ExperimentSchemaError(f"Unsupported configuration schema version: {schema_version!r}")
+        fields = {"kind", "schema_version", "experiment_id", "name", "command", "environment", "source", "created_at"}
+        if schema_version == _CONFIGURATION_SCHEMA_VERSION:
+            fields.add("parameters")
         require_exact_fields(
             data,
-            {"kind", "schema_version", "experiment_id", "name", "command", "environment", "source", "created_at"},
+            fields,
             "configuration",
             ExperimentSchemaError,
         )
         if data["kind"] != "runforge_experiment_configuration":
             raise ExperimentSchemaError("Unsupported configuration kind")
-        if data["schema_version"] != EXPERIMENT_SCHEMA_VERSION:
-            raise ExperimentSchemaError(f"Unsupported configuration schema version: {data['schema_version']!r}")
         return cls(
             experiment_id=require_text(data["experiment_id"], "experiment_id", ExperimentSchemaError),
             name=require_text(data["name"], "name", ExperimentSchemaError),
@@ -161,6 +170,11 @@ class ExperimentConfiguration:
             environment=require_string_mapping(data["environment"], "environment", ExperimentSchemaError),
             source=GitSource.from_dict(data["source"]),
             created_at=require_text(data["created_at"], "created_at", ExperimentSchemaError),
+            parameters=(
+                require_string_mapping(data["parameters"], "parameters", ExperimentSchemaError)
+                if schema_version == _CONFIGURATION_SCHEMA_VERSION
+                else {}
+            ),
         )
 
 

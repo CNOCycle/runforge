@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from runforge.experiment_schema import (
@@ -11,6 +13,9 @@ from runforge.experiment_schema import (
     ExperimentStatus,
 )
 from runforge.source_metadata import GitSource
+
+
+CONFIGURATION_SCHEMA_VERSION = 2
 
 
 def _source(tmp_path):
@@ -35,6 +40,23 @@ def test_argument_command_and_configuration_round_trip(tmp_path):
 
     assert decoded == configuration
     assert decoded.command.to_dict() == {"mode": "argv", "arguments": ["python", "train.py", "--out", "{ARTIFACT_DIR}"]}
+
+
+def test_configuration_records_matrix_parameters_and_decodes_schema_version_one(tmp_path):
+    configuration = replace(
+        _configuration(tmp_path, ExperimentCommand.argv(("python", "train.py"))),
+        parameters={"LR": "0.01", "SEED": "2"},
+    )
+    payload = configuration.to_dict()
+
+    assert payload["schema_version"] == CONFIGURATION_SCHEMA_VERSION
+    assert payload["parameters"] == {"LR": "0.01", "SEED": "2"}
+    assert ExperimentConfiguration.from_dict(payload) == configuration
+
+    legacy = dict(payload)
+    legacy["schema_version"] = 1
+    legacy.pop("parameters")
+    assert ExperimentConfiguration.from_dict(legacy).parameters == {}
 
 
 def test_shell_pipeline_template_renders_artifact_dir_without_mutating_template(tmp_path):
