@@ -10,6 +10,7 @@ from pathlib import Path
 
 from runforge.experiment_schema import ExperimentCommand
 from runforge.planner import PlanningError, PlanRequest, plan_experiment
+from runforge.source_metadata import PinnedGitSource
 from runforge.worker import WorkerError, run_experiment
 
 
@@ -34,10 +35,10 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="runforge", description="Plan, launch, or run one Git-backed experiment.")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
-    plan = subparsers.add_parser("plan", help="create one current-HEAD experiment directory without execution")
+    plan = subparsers.add_parser("plan", help="create one Git-backed experiment directory without execution")
     _add_planning_arguments(plan)
 
-    launch = subparsers.add_parser("launch", help="create and immediately run one current-HEAD experiment")
+    launch = subparsers.add_parser("launch", help="create and immediately run one Git-backed experiment")
     _add_planning_arguments(launch)
     _add_stream_output_argument(launch)
 
@@ -51,6 +52,9 @@ def _add_planning_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--name", default="exp")
     parser.add_argument("--out-dir", type=Path, help="default: SOURCE_REPOSITORY/reports")
     parser.add_argument("--source-path", type=Path, default=Path("."))
+    parser.add_argument("--source-mode", choices=("current-head", "pinned-git"), default="current-head")
+    parser.add_argument("--commit", help="commit or ref for a pinned Git source")
+    parser.add_argument("--patch", type=Path, help="optional patch for a pinned Git source")
     parser.add_argument("--env-file", type=Path)
     parser.add_argument(
         "--shell",
@@ -95,8 +99,23 @@ def _plan(arguments: argparse.Namespace) -> Path:
             command=command,
             output_root=arguments.out_dir,
             source_path=arguments.source_path,
+            source=_pinned_source(arguments),
             environment=_environment(arguments.env_file),
         )
+    )
+
+
+def _pinned_source(arguments: argparse.Namespace) -> PinnedGitSource | None:
+    if arguments.source_mode == "current-head":
+        if arguments.commit is not None or arguments.patch is not None:
+            raise PlanningError("--commit and --patch require --source-mode pinned-git")
+        return None
+    if arguments.commit is None:
+        raise PlanningError("--source-mode pinned-git requires --commit")
+    return PinnedGitSource(
+        repository=arguments.source_path,
+        commit=arguments.commit,
+        patch=arguments.patch,
     )
 
 

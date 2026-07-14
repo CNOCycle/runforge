@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 from runforge.cli import main
-from runforge.experiment_schema import ExperimentStatus
+from runforge.experiment_schema import ExperimentConfiguration, ExperimentStatus
 from runforge.json_store import load_json_object
 
 
@@ -103,6 +103,40 @@ def test_cli_formats_untracked_warnings_without_python_source_lines(tmp_path, ca
         "  b",
     ]
     assert "return plan_experiment(" not in captured.err
+
+
+def test_cli_plans_an_explicit_pinned_git_source(tmp_path, capsys):
+    repository = _repository(tmp_path)
+    pinned_commit = _git(repository, "rev-parse", "HEAD")
+    train = repository / "train.py"
+    train.write_text("print('advanced checkout')\n", encoding="utf-8")
+    _git(repository, "add", "train.py")
+    _git(repository, "commit", "-m", "advance checkout")
+
+    assert (
+        main(
+            [
+                "plan",
+                "--source-mode",
+                "pinned-git",
+                "--commit",
+                pinned_commit,
+                "--source-path",
+                str(repository),
+                "--out-dir",
+                str(tmp_path / "reports"),
+                "--",
+                "python",
+                "train.py",
+            ]
+        )
+        == 0
+    )
+    experiment = _planned_path(capsys.readouterr().out)
+    configuration = ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json"))
+
+    assert configuration.source.commit == pinned_commit
+    assert configuration.source.branch == "pinned"
 
 
 def test_cli_launches_a_new_experiment_immediately(tmp_path, capsys):
