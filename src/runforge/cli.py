@@ -1,4 +1,4 @@
-"""CLI wrappers for planning, running, or launching one experiment."""
+"""CLI wrappers for planning and running Git-backed experiments."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from runforge.experiment_schema import ExperimentCommand
-from runforge.planner import PlanningError, PlanRequest, plan_experiment
+from runforge.json_store import load_json_object
+from runforge.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
 from runforge.source_metadata import PinnedGitSource
 from runforge.worker import WorkerError, run_experiment
 
@@ -19,6 +20,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     arguments = parser.parse_args(argv)
     try:
+        if arguments.subcommand == "matrix":
+            experiments = _matrix(arguments)
+            print(f"Experiment plans created ({len(experiments)}):", flush=True)
+            for experiment in experiments:
+                print(f"  {experiment}", flush=True)
+            return 0
         if arguments.subcommand in {"plan", "launch"}:
             experiment = _plan_with_warnings(arguments)
             print(f"Experiment plan created at: {experiment}", flush=True)
@@ -32,7 +39,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="runforge", description="Plan, launch, or run one Git-backed experiment.")
+    parser = argparse.ArgumentParser(prog="runforge", description="Plan or run Git-backed experiments.")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     plan = subparsers.add_parser("plan", help="create one Git-backed experiment directory without execution")
@@ -42,18 +49,25 @@ def _parser() -> argparse.ArgumentParser:
     _add_planning_arguments(launch)
     _add_stream_output_argument(launch)
 
+    matrix = subparsers.add_parser("matrix", help="create a pinned-source Cartesian experiment matrix")
+    matrix.add_argument("--matrix-file", type=Path, required=True)
+    _add_planning_arguments(matrix, pinned_only=True)
+
     run = subparsers.add_parser("run", help="execute one explicit planned experiment directory")
     _add_stream_output_argument(run)
     run.add_argument("experiment", type=Path)
     return parser
 
 
-def _add_planning_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_planning_arguments(parser: argparse.ArgumentParser, *, pinned_only: bool = False) -> None:
     parser.add_argument("--name", default="exp")
     parser.add_argument("--out-dir", type=Path, help="default: SOURCE_REPOSITORY/reports")
     parser.add_argument("--source-path", type=Path, default=Path("."))
-    parser.add_argument("--source-mode", choices=("current-head", "pinned-git"), default="current-head")
-    parser.add_argument("--commit", help="commit or ref for a pinned Git source")
+    if pinned_only:
+        parser.set_defaults(source_mode="pinned-git")
+    else:
+        parser.add_argument("--source-mode", choices=("current-head", "pinned-git"), default="current-head")
+    parser.add_argument("--commit", required=pinned_only, help="commit or ref for a pinned Git source")
     parser.add_argument("--patch", type=Path, help="optional patch for a pinned Git source")
     parser.add_argument("--env-file", type=Path)
     parser.add_argument(
@@ -82,6 +96,18 @@ def _plan_with_warnings(arguments: argparse.Namespace) -> Path:
 
 
 def _plan(arguments: argparse.Namespace) -> Path:
+    return plan_experiment(_planning_request(arguments))
+
+
+def _matrix(arguments: argparse.Namespace) -> tuple[Path, ...]:
+    try:
+        parameters = load_json_object(arguments.matrix_file)
+    except ValueError as error:
+        raise PlanningError(str(error)) from error
+    return plan_matrix(MatrixPlanRequest(template=_planning_request(arguments), parameters=parameters))
+
+
+def _planning_request(arguments: argparse.Namespace) -> PlanRequest:
     parts = list(arguments.command)
     if parts and parts[0] == "--":
         parts.pop(0)
@@ -93,15 +119,13 @@ def _plan(arguments: argparse.Namespace) -> Path:
         command = ExperimentCommand.shell(parts[0])
     else:
         command = ExperimentCommand.argv(parts)
-    return plan_experiment(
-        PlanRequest(
-            name=arguments.name,
-            command=command,
-            output_root=arguments.out_dir,
-            source_path=arguments.source_path,
-            source=_pinned_source(arguments),
-            environment=_environment(arguments.env_file),
-        )
+    return PlanRequest(
+        name=arguments.name,
+        command=command,
+        output_root=arguments.out_dir,
+        source_path=arguments.source_path,
+        source=_pinned_source(arguments),
+        environment=_environment(arguments.env_file),
     )
 
 
