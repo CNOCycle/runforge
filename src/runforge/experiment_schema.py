@@ -2,40 +2,22 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from runforge.schema_utils import require_exact_fields, require_object, require_string_mapping, require_text
 from runforge.source_metadata import GitSource
 
 
+_PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")
 EXPERIMENT_SCHEMA_VERSION = 1
 _STATUS_STATES = frozenset({"created", "init", "inprogress", "completed", "failed"})
 
 
 class ExperimentSchemaError(ValueError):
     """Raised when experiment command, configuration, or status data is invalid."""
-
-
-def _text(value: Any, context: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ExperimentSchemaError(f"{context} must be a non-empty string")
-    return value
-
-
-def _object(value: Any, context: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise ExperimentSchemaError(f"{context} must be a JSON object")
-    return value
-
-
-def _exact_fields(data: Mapping[str, Any], expected: set[str], context: str) -> None:
-    unknown = sorted(set(data) - expected)
-    missing = sorted(expected - set(data))
-    if unknown:
-        raise ExperimentSchemaError(f"Unknown {context} field(s): {', '.join(unknown)}")
-    if missing:
-        raise ExperimentSchemaError(f"Missing {context} field(s): {', '.join(missing)}")
 
 
 def _arguments(value: Any) -> tuple[str, ...]:
@@ -67,7 +49,7 @@ class ExperimentCommand:
         if self.mode == "shell":
             if self.arguments:
                 raise ExperimentSchemaError("shell command must not define arguments")
-            _text(self.script, "command.script")
+            require_text(self.script, "command.script", ExperimentSchemaError)
             return
         raise ExperimentSchemaError("command.mode must be either argv or shell")
 
@@ -91,12 +73,10 @@ class ExperimentCommand:
         for key, value in values.items():
             if not isinstance(key, str) or not key or not isinstance(value, str):
                 raise ExperimentSchemaError("placeholder values must map non-empty strings to strings")
-            replacements["{" + key + "}"] = value
+            replacements[key] = value
 
         def render(text: str) -> str:
-            for placeholder, replacement in replacements.items():
-                text = text.replace(placeholder, replacement)
-            return text
+            return _PLACEHOLDER_PATTERN.sub(lambda match: replacements.get(match.group(1), match.group(0)), text)
 
         if self.mode == "argv":
             return ExperimentCommand.argv(tuple(render(argument) for argument in self.arguments))
@@ -111,17 +91,17 @@ class ExperimentCommand:
     @classmethod
     def from_dict(cls, value: Any) -> ExperimentCommand:
         """Decode one supported command representation."""
-        data = _object(value, "command")
+        data = require_object(value, "command", ExperimentSchemaError)
         mode = data.get("mode")
         if mode == "argv":
-            _exact_fields(data, {"mode", "arguments"}, "command")
+            require_exact_fields(data, {"mode", "arguments"}, "command", ExperimentSchemaError)
             arguments = data["arguments"]
             if not isinstance(arguments, list):
                 raise ExperimentSchemaError("command.arguments must be an array")
             return cls.argv(arguments)
         if mode == "shell":
-            _exact_fields(data, {"mode", "script"}, "command")
-            return cls.shell(_text(data["script"], "command.script"))
+            require_exact_fields(data, {"mode", "script"}, "command", ExperimentSchemaError)
+            return cls.shell(require_text(data["script"], "command.script", ExperimentSchemaError))
         raise ExperimentSchemaError("command.mode must be either argv or shell")
 
 
@@ -137,17 +117,15 @@ class ExperimentConfiguration:
     created_at: str
 
     def __post_init__(self) -> None:
-        _text(self.experiment_id, "experiment_id")
-        _text(self.name, "name")
+        require_text(self.experiment_id, "experiment_id", ExperimentSchemaError)
+        require_text(self.name, "name", ExperimentSchemaError)
         if not isinstance(self.command, ExperimentCommand):
             raise ExperimentSchemaError("command must be ExperimentCommand metadata")
-        environment = dict(self.environment)
-        if not all(isinstance(key, str) and key and isinstance(value, str) for key, value in environment.items()):
-            raise ExperimentSchemaError("environment must map non-empty strings to strings")
+        environment = require_string_mapping(self.environment, "environment", ExperimentSchemaError)
         object.__setattr__(self, "environment", environment)
         if not isinstance(self.source, GitSource):
             raise ExperimentSchemaError("source must be GitSource metadata")
-        _text(self.created_at, "created_at")
+        require_text(self.created_at, "created_at", ExperimentSchemaError)
 
     def to_dict(self) -> dict[str, Any]:
         """Return the versioned immutable configuration object."""
@@ -165,23 +143,24 @@ class ExperimentConfiguration:
     @classmethod
     def from_dict(cls, value: Any) -> ExperimentConfiguration:
         """Decode one exact supported configuration object."""
-        data = _object(value, "configuration")
-        _exact_fields(
+        data = require_object(value, "configuration", ExperimentSchemaError)
+        require_exact_fields(
             data,
             {"kind", "schema_version", "experiment_id", "name", "command", "environment", "source", "created_at"},
             "configuration",
+            ExperimentSchemaError,
         )
         if data["kind"] != "runforge_experiment_configuration":
             raise ExperimentSchemaError("Unsupported configuration kind")
         if data["schema_version"] != EXPERIMENT_SCHEMA_VERSION:
             raise ExperimentSchemaError(f"Unsupported configuration schema version: {data['schema_version']!r}")
         return cls(
-            experiment_id=_text(data["experiment_id"], "experiment_id"),
-            name=_text(data["name"], "name"),
+            experiment_id=require_text(data["experiment_id"], "experiment_id", ExperimentSchemaError),
+            name=require_text(data["name"], "name", ExperimentSchemaError),
             command=ExperimentCommand.from_dict(data["command"]),
-            environment=dict(_object(data["environment"], "environment")),
+            environment=require_string_mapping(data["environment"], "environment", ExperimentSchemaError),
             source=GitSource.from_dict(data["source"]),
-            created_at=_text(data["created_at"], "created_at"),
+            created_at=require_text(data["created_at"], "created_at", ExperimentSchemaError),
         )
 
 
@@ -202,14 +181,14 @@ class ExperimentStatus:
             raise ExperimentSchemaError(f"Unsupported experiment status state: {self.state!r}")
         if isinstance(self.attempt, bool) or not isinstance(self.attempt, int) or self.attempt < 0:
             raise ExperimentSchemaError("status.attempt must be a non-negative integer")
-        _text(self.updated_at, "status.updated_at")
+        require_text(self.updated_at, "status.updated_at", ExperimentSchemaError)
         for context, value in (("status.started_at", self.started_at), ("status.finished_at", self.finished_at)):
             if value is not None:
-                _text(value, context)
+                require_text(value, context, ExperimentSchemaError)
         if self.exit_code is not None and (isinstance(self.exit_code, bool) or not isinstance(self.exit_code, int)):
             raise ExperimentSchemaError("status.exit_code must be an integer or null")
         if self.error is not None:
-            _text(self.error, "status.error")
+            require_text(self.error, "status.error", ExperimentSchemaError)
 
     def to_dict(self) -> dict[str, Any]:
         """Return the versioned mutable status object."""
@@ -228,8 +207,8 @@ class ExperimentStatus:
     @classmethod
     def from_dict(cls, value: Any) -> ExperimentStatus:
         """Decode one exact supported status object."""
-        data = _object(value, "status")
-        _exact_fields(
+        data = require_object(value, "status", ExperimentSchemaError)
+        require_exact_fields(
             data,
             {
                 "kind",
@@ -243,15 +222,16 @@ class ExperimentStatus:
                 "error",
             },
             "status",
+            ExperimentSchemaError,
         )
         if data["kind"] != "runforge_experiment_status":
             raise ExperimentSchemaError("Unsupported status kind")
         if data["schema_version"] != EXPERIMENT_SCHEMA_VERSION:
             raise ExperimentSchemaError(f"Unsupported status schema version: {data['schema_version']!r}")
         return cls(
-            state=_text(data["state"], "status.state"),
+            state=require_text(data["state"], "status.state", ExperimentSchemaError),
             attempt=data["attempt"],
-            updated_at=_text(data["updated_at"], "status.updated_at"),
+            updated_at=require_text(data["updated_at"], "status.updated_at", ExperimentSchemaError),
             started_at=data["started_at"],
             finished_at=data["finished_at"],
             exit_code=data["exit_code"],

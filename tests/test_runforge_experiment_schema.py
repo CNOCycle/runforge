@@ -52,6 +52,14 @@ def test_shell_pipeline_template_renders_artifact_dir_without_mutating_template(
     assert _configuration(tmp_path, rendered).command == rendered
 
 
+def test_placeholder_rendering_is_one_pass_and_does_not_rewrite_inserted_values():
+    template = ExperimentCommand.argv(("{FIRST}", "{SECOND}"))
+
+    rendered = template.render_placeholders({"FIRST": "{SECOND}", "SECOND": "done"})
+
+    assert rendered.arguments == ("{SECOND}", "done")
+
+
 def test_status_round_trip_is_separate_from_configuration(tmp_path):
     configuration = _configuration(tmp_path, ExperimentCommand.argv(("python", "train.py")))
     status = ExperimentStatus(

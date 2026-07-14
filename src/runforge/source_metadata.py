@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from runforge.schema_utils import require_exact_fields, require_object, require_text
 
 
 SOURCE_SCHEMA_VERSION = 1
@@ -16,21 +17,6 @@ _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 class SourceMetadataError(ValueError):
     """Raised when Git source metadata is invalid or cannot be decoded."""
-
-
-def _non_empty_string(value: Any, context: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise SourceMetadataError(f"{context} must be a non-empty string")
-    return value
-
-
-def _exact_fields(data: Mapping[str, Any], expected: set[str]) -> None:
-    unknown = sorted(set(data) - expected)
-    missing = sorted(expected - set(data))
-    if unknown:
-        raise SourceMetadataError(f"Unknown Git source field(s): {', '.join(unknown)}")
-    if missing:
-        raise SourceMetadataError(f"Missing Git source field(s): {', '.join(missing)}")
 
 
 @dataclass(frozen=True)
@@ -51,7 +37,7 @@ class GitSource:
         object.__setattr__(self, "repository", repository)
         if not _COMMIT_PATTERN.fullmatch(self.commit):
             raise SourceMetadataError("commit must be a full Git object ID")
-        _non_empty_string(self.branch, "branch")
+        require_text(self.branch, "branch", SourceMetadataError)
         if (self.patch_file is None) != (self.patch_sha256 is None):
             raise SourceMetadataError("patch_file and patch_sha256 must be supplied together")
         if self.patch_file is not None:
@@ -90,12 +76,12 @@ class GitSource:
     @classmethod
     def from_dict(cls, value: Any) -> GitSource:
         """Decode one exact supported version of source metadata."""
-        if not isinstance(value, Mapping):
-            raise SourceMetadataError("Git source metadata must be a JSON object")
-        data = value
-        _exact_fields(
+        data = require_object(value, "Git source metadata", SourceMetadataError)
+        require_exact_fields(
             data,
             {"kind", "schema_version", "repository", "commit", "branch", "patch", "untracked_files"},
+            "Git source",
+            SourceMetadataError,
         )
         if data["kind"] != "runforge_git_source":
             raise SourceMetadataError("Unsupported Git source kind")
@@ -105,23 +91,17 @@ class GitSource:
         patch_sha256: str | None = None
         patch = data["patch"]
         if patch is not None:
-            if not isinstance(patch, Mapping):
-                raise SourceMetadataError("patch must be a JSON object or null")
-            unknown = sorted(set(patch) - {"file", "sha256"})
-            missing = sorted({"file", "sha256"} - set(patch))
-            if unknown:
-                raise SourceMetadataError(f"Unknown patch field(s): {', '.join(unknown)}")
-            if missing:
-                raise SourceMetadataError(f"Missing patch field(s): {', '.join(missing)}")
-            patch_file = _non_empty_string(patch["file"], "patch.file")
-            patch_sha256 = _non_empty_string(patch["sha256"], "patch.sha256")
+            patch_data = require_object(patch, "patch", SourceMetadataError)
+            require_exact_fields(patch_data, {"file", "sha256"}, "patch", SourceMetadataError)
+            patch_file = require_text(patch_data["file"], "patch.file", SourceMetadataError)
+            patch_sha256 = require_text(patch_data["sha256"], "patch.sha256", SourceMetadataError)
         untracked = data["untracked_files"]
         if not isinstance(untracked, list):
             raise SourceMetadataError("untracked_files must be an array")
         return cls(
-            repository=Path(_non_empty_string(data["repository"], "repository")),
-            commit=_non_empty_string(data["commit"], "commit"),
-            branch=_non_empty_string(data["branch"], "branch"),
+            repository=Path(require_text(data["repository"], "repository", SourceMetadataError)),
+            commit=require_text(data["commit"], "commit", SourceMetadataError),
+            branch=require_text(data["branch"], "branch", SourceMetadataError),
             patch_file=patch_file,
             patch_sha256=patch_sha256,
             untracked_files=tuple(untracked),
