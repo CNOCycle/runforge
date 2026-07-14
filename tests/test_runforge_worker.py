@@ -90,3 +90,26 @@ def test_worker_records_nonzero_command_exit(tmp_path):
     assert status.error == "Command exited with status 7"
     assert "out" in (experiment / "stdout.log").read_text(encoding="utf-8")
     assert "err" in (experiment / "stderr.log").read_text(encoding="utf-8")
+
+
+def test_worker_streams_output_to_console_and_preserves_logs(tmp_path, capsys):
+    repository = _repository(
+        tmp_path,
+        "import sys\nprint('live out', flush=True)\nprint('live err', file=sys.stderr, flush=True)\n",
+    )
+    experiment = plan_experiment(
+        PlanRequest(
+            name="streamed",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=tmp_path / "reports",
+        )
+    )
+
+    assert run_experiment(experiment, stream_output=True) == 0
+    captured = capsys.readouterr()
+
+    assert captured.out == "live out\n"
+    assert captured.err == "live err\n"
+    assert (experiment / "stdout.log").read_text(encoding="utf-8") == "live out\n"
+    assert (experiment / "stderr.log").read_text(encoding="utf-8") == "live err\n"
