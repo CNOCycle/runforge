@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import subprocess
 import hashlib
+import subprocess
 from pathlib import Path
 
 import pytest
 
+import runforge.planner as planner_module
 from runforge.experiment_schema import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.json_store import load_json_object
-from runforge.planner import PlanningError, PlanRequest, plan_experiment
+from runforge.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
 from runforge.source_metadata import PinnedGitSource
 
 
@@ -145,6 +146,76 @@ def test_planner_resolves_copies_and_hashes_patch_for_pinned_commit(tmp_path):
     assert configuration.source.patch_file == "git.patch"
     assert configuration.source.patch_sha256 == hashlib.sha256(captured_patch).hexdigest()
     assert captured_patch == patch_path.read_bytes()
+
+
+def test_matrix_planner_resolves_source_once_and_publishes_deterministic_combinations(tmp_path, monkeypatch):
+    repository = _repository(tmp_path)
+    pinned_commit = _git(repository, "rev-parse", "HEAD")
+    template = PlanRequest(
+        name="sweep",
+        command=ExperimentCommand.argv(("python", "train.py", "--lr={LR}", "--seed={SEED}", "--out={ARTIFACT_DIR}")),
+        output_root=tmp_path / "reports",
+        source=PinnedGitSource(repository=repository, commit=pinned_commit),
+    )
+    request = MatrixPlanRequest(
+        template=template,
+        parameters={"SEED": [2, 1], "LR": [0.1, 0.01]},
+    )
+    calls = 0
+    original_resolver = planner_module.resolve_pinned_git_source
+
+    def count_resolution(descriptor):
+        nonlocal calls
+        calls += 1
+        return original_resolver(descriptor)
+
+    monkeypatch.setattr(planner_module, "resolve_pinned_git_source", count_resolution)
+    experiments = plan_matrix(request)
+    configurations = tuple(
+        ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json")) for experiment in experiments
+    )
+    expected = (
+        {"LR": "0.1", "SEED": "2"},
+        {"LR": "0.1", "SEED": "1"},
+        {"LR": "0.01", "SEED": "2"},
+        {"LR": "0.01", "SEED": "1"},
+    )
+
+    assert calls == 1
+    assert tuple(configuration.parameters for configuration in configurations) == expected
+    assert [experiment.name.rsplit("_", 1)[-1] for experiment in experiments] == ["0", "1", "2", "3"]
+    assert {configuration.source.commit for configuration in configurations} == {pinned_commit}
+    for experiment, configuration, parameters in zip(experiments, configurations, expected, strict=True):
+        assert configuration.command.arguments[-3] == f"--lr={parameters['LR']}"
+        assert configuration.command.arguments[-2] == f"--seed={parameters['SEED']}"
+        assert configuration.command.arguments[-1] == f"--out={experiment / 'artifacts'}"
+
+
+def test_matrix_planner_rejects_invalid_axis_before_creating_output(tmp_path):
+    repository = _repository(tmp_path)
+    output_root = tmp_path / "reports"
+    template = PlanRequest(
+        name="invalid matrix",
+        command=ExperimentCommand.argv(("python", "train.py", "--lr={LR}")),
+        output_root=output_root,
+        source=PinnedGitSource(repository=repository, commit="HEAD"),
+    )
+
+    with pytest.raises(PlanningError, match="strings, numbers, or booleans"):
+        MatrixPlanRequest(
+            template=template,
+            parameters={"LR": [0.1, None]},
+        )
+
+    assert not output_root.exists()
+
+    current_template = PlanRequest(
+        name="current matrix",
+        command=ExperimentCommand.argv(("python", "train.py")),
+        source_path=repository,
+    )
+    with pytest.raises(PlanningError, match="requires a pinned Git source"):
+        MatrixPlanRequest(template=current_template, parameters={"LR": [0.1]})
 
 
 def test_planner_reports_invalid_non_git_source_path(tmp_path):

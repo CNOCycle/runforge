@@ -1,4 +1,4 @@
-"""Git-backed single-experiment planning without command execution."""
+"""Git-backed single and matrix experiment planning without execution."""
 
 from __future__ import annotations
 
@@ -8,12 +8,13 @@ import shlex
 import shutil
 import uuid
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from runforge.experiment_schema import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.json_store import save_json_object
+from runforge.matrix import MatrixError, expand_matrix
 from runforge.source_metadata import PinnedGitSource
 from runforge.source_resolver import (
     ResolvedGitSource,
@@ -61,8 +62,45 @@ class PlanRequest:
         object.__setattr__(self, "environment", environment)
 
 
+@dataclass(frozen=True)
+class MatrixPlanRequest:
+    """A pinned plan template plus one validated Cartesian parameter matrix."""
+
+    template: PlanRequest
+    parameters: Mapping[str, Sequence[object]]
+    combinations: tuple[dict[str, str], ...] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.template, PlanRequest):
+            raise PlanningError("template must be PlanRequest metadata")
+        if self.template.source is None:
+            raise PlanningError("matrix planning requires a pinned Git source")
+        try:
+            combinations = expand_matrix(self.parameters)
+        except MatrixError as error:
+            raise PlanningError(str(error)) from error
+        object.__setattr__(self, "parameters", {key: tuple(self.parameters[key]) for key in sorted(self.parameters)})
+        object.__setattr__(self, "combinations", combinations)
+
+
+@dataclass(frozen=True)
+class _PreparedExperiment:
+    destination: Path
+    configuration: ExperimentConfiguration
+    status: ExperimentStatus
+
+
 def plan_experiment(request: PlanRequest) -> Path:
     """Create one self-contained current-HEAD or pinned experiment plan."""
+    return _plan_resolved_experiment(request, _resolve_source(request))
+
+
+def plan_matrix(request: MatrixPlanRequest) -> tuple[Path, ...]:
+    """Create one experiment plan per deterministic pinned-source combination."""
+    return _plan_resolved_matrix(request, _resolve_source(request.template))
+
+
+def _resolve_source(request: PlanRequest) -> ResolvedGitSource:
     try:
         if request.source is None:
             resolved = resolve_current_git_source(request.source_path)
@@ -70,7 +108,7 @@ def plan_experiment(request: PlanRequest) -> Path:
             resolved = resolve_pinned_git_source(request.source)
     except SourceResolutionError as error:
         raise PlanningError(str(error)) from error
-    return _plan_resolved_experiment(request, resolved)
+    return resolved
 
 
 def _plan_resolved_experiment(request: PlanRequest, resolved: ResolvedGitSource) -> Path:
@@ -78,37 +116,85 @@ def _plan_resolved_experiment(request: PlanRequest, resolved: ResolvedGitSource)
     source = resolved.source
     output_root = request.output_root or resolved.repository.root / _DEFAULT_OUTPUT_ROOT
     destination = _destination(output_root, source.branch, source.commit, request.name)
-    rendered_command = request.command.render_placeholders({"ARTIFACT_DIR": str(destination / "artifacts")})
+    prepared = _prepare_experiment(request, resolved, destination, {}, utc_now())
+    _publish(prepared.destination, prepared.configuration, prepared.status, resolved.patch)
+    _warn_untracked(source.untracked_files)
+    return destination
+
+
+def _plan_resolved_matrix(request: MatrixPlanRequest, resolved: ResolvedGitSource) -> tuple[Path, ...]:
+    """Prepare every combination before publishing any experiment directory."""
+    template = request.template
+    source = resolved.source
+    output_root = template.output_root or resolved.repository.root / _DEFAULT_OUTPUT_ROOT
+    reserved: set[Path] = set()
     timestamp = utc_now()
+    prepared: list[_PreparedExperiment] = []
+    for parameters in request.combinations:
+        destination = _destination(output_root, source.branch, source.commit, template.name, reserved=reserved)
+        reserved.add(destination)
+        prepared.append(_prepare_experiment(template, resolved, destination, parameters, timestamp))
+    created: list[Path] = []
+    try:
+        for experiment in prepared:
+            _publish(experiment.destination, experiment.configuration, experiment.status, resolved.patch)
+            created.append(experiment.destination)
+    except Exception:
+        for destination in created:
+            shutil.rmtree(destination, ignore_errors=True)
+        raise
+    return tuple(experiment.destination for experiment in prepared)
+
+
+def _prepare_experiment(
+    request: PlanRequest,
+    resolved: ResolvedGitSource,
+    destination: Path,
+    parameters: Mapping[str, str],
+    timestamp: str,
+) -> _PreparedExperiment:
+    """Build and validate immutable plan data without publishing files."""
+    placeholders = dict(parameters)
+    placeholders["ARTIFACT_DIR"] = str(destination / "artifacts")
+    rendered_command = request.command.render_placeholders(placeholders)
     configuration = ExperimentConfiguration(
         experiment_id=destination.name,
         name=request.name,
         command=rendered_command,
         environment=request.environment,
-        source=source,
+        source=resolved.source,
         created_at=timestamp,
+        parameters=parameters,
     )
     status = ExperimentStatus(state="created", attempt=0, updated_at=timestamp)
-    _publish(destination, configuration, status, resolved.patch)
-    if source.untracked_files:
-        warnings.warn(
-            "Planned Git source has untracked files that are not included in git.patch:\n"
-            + "\n".join(f"  {path}" for path in source.untracked_files),
-            stacklevel=2,
-        )
-    return destination
+    return _PreparedExperiment(destination, configuration, status)
 
 
-def _destination(output_root: Path, branch: str, commit: str, name: str) -> Path:
+def _destination(
+    output_root: Path,
+    branch: str,
+    commit: str,
+    name: str,
+    reserved: set[Path] | None = None,
+) -> Path:
     parent = output_root.expanduser().resolve() / _slug(branch, "detached")
     parent.mkdir(parents=True, exist_ok=True)
     prefix = f"{commit[:_COMMIT_PREFIX_LENGTH]}_{_slug(name, 'experiment')}"
     index = 0
     while True:
         destination = parent / f"{prefix}_{index}"
-        if not destination.exists():
+        if not destination.exists() and (reserved is None or destination not in reserved):
             return destination
         index += 1
+
+
+def _warn_untracked(untracked_files: Sequence[str]) -> None:
+    if untracked_files:
+        warnings.warn(
+            "Planned Git source has untracked files that are not included in git.patch:\n"
+            + "\n".join(f"  {path}" for path in untracked_files),
+            stacklevel=3,
+        )
 
 
 def _publish(
