@@ -1,5 +1,12 @@
 """Standalone building blocks for RunForge."""
 
+from runforge.discovery import (
+    DiscoveredExperiment,
+    DiscoveryDiagnostic,
+    DiscoveryError,
+    DiscoveryResult,
+    discover_experiments,
+)
 from runforge.experiment_schema import ExperimentCommand
 from runforge.git_ops import GitHead, GitOperationError, GitRepository
 from runforge.planner import (
@@ -15,6 +22,10 @@ from runforge.worker import WorkerError, WorkerProgressEvent, run_experiment
 
 
 __all__ = [
+    "DiscoveredExperiment",
+    "DiscoveryDiagnostic",
+    "DiscoveryError",
+    "DiscoveryResult",
     "ExperimentCommand",
     "GitHead",
     "GitOperationError",
@@ -27,6 +38,7 @@ __all__ = [
     "RetryPreparation",
     "WorkerError",
     "WorkerProgressEvent",
+    "discover_experiments",
     "plan_experiment",
     "plan_matrix",
     "prepare_retry",
