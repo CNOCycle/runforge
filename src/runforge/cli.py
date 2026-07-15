@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from runforge.experiment_schema import ExperimentCommand
+from runforge.experiment_schema import ExperimentCommand, ExperimentConfiguration
+from runforge.git_ops import GitOperationError, GitRepository
 from runforge.json_store import load_json_object
 from runforge.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
 from runforge.source_metadata import PinnedGitSource
@@ -31,17 +33,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         if arguments.subcommand == "matrix":
-            experiments = _matrix(arguments)
+            request = _matrix_request(arguments)
+            _print_planning_arguments(
+                arguments,
+                request.template,
+                extra=(
+                    ("matrix file", _path_text(arguments.matrix_file)),
+                    ("matrix combinations", str(len(request.combinations))),
+                ),
+            )
+            experiments = plan_matrix(request)
             print(f"Experiment plans created ({len(experiments)}):", flush=True)
             for experiment in experiments:
                 print(f"  {experiment}", flush=True)
             return 0
         if arguments.subcommand in {"plan", "launch"}:
-            experiment = _plan_with_warnings(arguments)
+            request = _planning_request(arguments)
+            _print_planning_arguments(arguments, request)
+            experiment = _plan_with_warnings(request)
             print(f"Experiment plan created at: {experiment}", flush=True)
             if arguments.subcommand == "launch":
                 return run_experiment(experiment, stream_output=arguments.stream_output)
             return 0
+        _print_run_arguments(arguments)
         return run_experiment(arguments.experiment, stream_output=arguments.stream_output)
     except (PlanningError, WorkerError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
@@ -153,25 +167,21 @@ def _add_stream_output_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _plan_with_warnings(arguments: argparse.Namespace) -> Path:
+def _plan_with_warnings(request: PlanRequest) -> Path:
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
-        experiment = _plan(arguments)
+        experiment = plan_experiment(request)
     for captured_warning in captured:
         print(f"warning: {captured_warning.message}", file=sys.stderr)
     return experiment
 
 
-def _plan(arguments: argparse.Namespace) -> Path:
-    return plan_experiment(_planning_request(arguments))
-
-
-def _matrix(arguments: argparse.Namespace) -> tuple[Path, ...]:
+def _matrix_request(arguments: argparse.Namespace) -> MatrixPlanRequest:
     try:
         parameters = load_json_object(arguments.matrix_file)
     except ValueError as error:
         raise PlanningError(str(error)) from error
-    return plan_matrix(MatrixPlanRequest(template=_planning_request(arguments), parameters=parameters))
+    return MatrixPlanRequest(template=_planning_request(arguments), parameters=parameters)
 
 
 def _planning_request(arguments: argparse.Namespace) -> PlanRequest:
@@ -230,3 +240,93 @@ def _environment(path: Path | None) -> dict[str, str]:
             raise PlanningError(f"Empty environment key at {path}:{number}")
         environment[key] = value.strip().strip("'").strip('"')
     return environment
+
+
+def _print_planning_arguments(
+    arguments: argparse.Namespace,
+    request: PlanRequest,
+    *,
+    extra: tuple[tuple[str, str], ...] = (),
+) -> None:
+    rows = [
+        ("name", request.name),
+        ("output root", _effective_output_root(request)),
+        ("source path", _path_text(request.source_path)),
+        ("source mode", arguments.source_mode),
+        ("commit/ref", request.source.commit if request.source is not None else "not set"),
+        ("patch", _optional_path_text(request.source.patch if request.source is not None else None)),
+        ("environment file", _optional_path_text(arguments.env_file)),
+        ("environment keys", _keys_text(request.environment)),
+        ("command mode", request.command.mode),
+        ("shell mode", _boolean_text(request.command.mode == "shell")),
+        ("command", _command_text(request.command)),
+    ]
+    if hasattr(arguments, "stream_output"):
+        rows.append(("stream output", _boolean_text(arguments.stream_output)))
+    rows.extend(extra)
+    _print_effective_arguments(arguments.subcommand, rows)
+
+
+def _print_run_arguments(arguments: argparse.Namespace) -> None:
+    experiment = Path(arguments.experiment).expanduser().resolve()
+    configuration = _configuration_for_summary(experiment)
+    command = _command_text(configuration.command) if configuration is not None else "not available"
+    environment_keys = _keys_text(configuration.environment) if configuration is not None else "not available"
+    _print_effective_arguments(
+        "run",
+        [
+            ("experiment", str(experiment)),
+            ("stream output", _boolean_text(arguments.stream_output)),
+            ("recorded command", command),
+            ("environment keys", environment_keys),
+            ("artifact directory", str(experiment / "artifacts")),
+            ("stdout log", str(experiment / "stdout.log")),
+            ("stderr log", str(experiment / "stderr.log")),
+        ],
+    )
+
+
+def _print_effective_arguments(subcommand: str, rows: Sequence[tuple[str, str]]) -> None:
+    print(f"RunForge {subcommand} effective arguments:", flush=True)
+    for label, value in rows:
+        print(f"  {label}: {value}", flush=True)
+
+
+def _configuration_for_summary(experiment: Path) -> ExperimentConfiguration | None:
+    try:
+        return ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json"))
+    except ValueError:
+        return None
+
+
+def _effective_output_root(request: PlanRequest) -> str:
+    if request.output_root is not None:
+        return _path_text(request.output_root)
+    source_path = request.source.repository if request.source is not None else request.source_path
+    try:
+        return str(GitRepository.locate(source_path).root / "reports")
+    except GitOperationError:
+        return "not resolved (SOURCE_REPOSITORY/reports)"
+
+
+def _command_text(command: ExperimentCommand) -> str:
+    if command.mode == "shell":
+        return command.script or ""
+    return shlex.join(command.arguments)
+
+
+def _path_text(path: Path) -> str:
+    return str(Path(path).expanduser().resolve())
+
+
+def _optional_path_text(path: Path | None) -> str:
+    return _path_text(path) if path is not None else "not set"
+
+
+def _keys_text(values: Mapping[str, object]) -> str:
+    keys = sorted(values)
+    return ", ".join(keys) if keys else "none"
+
+
+def _boolean_text(value: bool) -> str:
+    return "enabled" if value else "disabled"
