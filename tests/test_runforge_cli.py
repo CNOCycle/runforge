@@ -38,8 +38,10 @@ def _repository(tmp_path: Path) -> Path:
 
 
 def _planned_path(output: str) -> Path:
-    assert output.startswith(PLAN_CREATED_PREFIX)
-    return Path(output.removeprefix(PLAN_CREATED_PREFIX).strip())
+    for line in output.splitlines():
+        if line.startswith(PLAN_CREATED_PREFIX):
+            return Path(line.removeprefix(PLAN_CREATED_PREFIX).strip())
+    raise AssertionError(f"{PLAN_CREATED_PREFIX!r} not found in output:\n{output}")
 
 
 def test_cli_plans_and_runs_one_explicit_experiment(tmp_path, capsys):
@@ -70,7 +72,7 @@ def test_cli_plans_and_runs_one_explicit_experiment(tmp_path, capsys):
 
     assert experiment.is_dir()
     assert main(["run", "--stream-output", str(experiment)]) == 0
-    assert capsys.readouterr().out == "planned command ran\n"
+    assert "planned command ran" in capsys.readouterr().out
 
 
 def test_cli_rejects_missing_command(capsys):
@@ -169,10 +171,15 @@ def test_cli_creates_a_pinned_cartesian_matrix(tmp_path, capsys):
         )
         == 0
     )
-    output = capsys.readouterr().out.splitlines()
-
-    assert output[0] == f"Experiment plans created ({MATRIX_PLAN_COUNT}):"
-    experiments = tuple(Path(line.strip()) for line in output[1:])
+    full_output = capsys.readouterr().out
+    assert "RunForge matrix effective arguments:" in full_output
+    assert f"  matrix file: {matrix_file}" in full_output
+    assert "  matrix combinations: 4" in full_output
+    assert "  source mode: pinned-git" in full_output
+    assert "  commit/ref: HEAD" in full_output
+    output = full_output.splitlines()
+    summary_index = output.index(f"Experiment plans created ({MATRIX_PLAN_COUNT}):")
+    experiments = tuple(Path(line.strip()) for line in output[summary_index + 1 :])
     assert len(experiments) == MATRIX_PLAN_COUNT
     configurations = [
         ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json")) for experiment in experiments
@@ -207,9 +214,11 @@ def test_cli_launches_a_new_experiment_immediately(tmp_path, capsys):
         )
         == 0
     )
-    output = capsys.readouterr().out.splitlines()
-    experiment = _planned_path(output[0])
-    assert output[1:] == ["planned command ran"]
+    output = capsys.readouterr().out
+    experiment = _planned_path(output)
+    assert "RunForge launch effective arguments:" in output
+    assert "  stream output: enabled" in output
+    assert "planned command ran" in output
     status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
 
     assert status.state == "completed"

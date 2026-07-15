@@ -3,16 +3,28 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from runforge.experiment_schema import ExperimentCommand
+from runforge.experiment_schema import ExperimentCommand, ExperimentConfiguration
+from runforge.git_ops import GitOperationError, GitRepository
 from runforge.json_store import load_json_object
 from runforge.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
 from runforge.source_metadata import PinnedGitSource
 from runforge.worker import WorkerError, run_experiment
+
+
+class _SemanticDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+    """Show literal defaults automatically while preserving semantic descriptions."""
+
+    def _get_help_string(self, action: argparse.Action) -> str:
+        help_text = action.help or ""
+        if action.required or "(default:" in help_text:
+            return help_text
+        return super()._get_help_string(action)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -21,17 +33,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         if arguments.subcommand == "matrix":
-            experiments = _matrix(arguments)
+            request = _matrix_request(arguments)
+            _print_planning_arguments(
+                arguments,
+                request.template,
+                extra=(
+                    ("matrix file", _path_text(arguments.matrix_file)),
+                    ("matrix combinations", str(len(request.combinations))),
+                ),
+            )
+            experiments = plan_matrix(request)
             print(f"Experiment plans created ({len(experiments)}):", flush=True)
             for experiment in experiments:
                 print(f"  {experiment}", flush=True)
             return 0
         if arguments.subcommand in {"plan", "launch"}:
-            experiment = _plan_with_warnings(arguments)
+            request = _planning_request(arguments)
+            _print_planning_arguments(arguments, request)
+            experiment = _plan_with_warnings(request)
             print(f"Experiment plan created at: {experiment}", flush=True)
             if arguments.subcommand == "launch":
                 return run_experiment(experiment, stream_output=arguments.stream_output)
             return 0
+        _print_run_arguments(arguments)
         return run_experiment(arguments.experiment, stream_output=arguments.stream_output)
     except (PlanningError, WorkerError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
@@ -39,72 +63,125 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="runforge", description="Plan or run Git-backed experiments.")
+    parser = argparse.ArgumentParser(
+        prog="runforge",
+        description="Plan, inspect, and run reproducible Git-backed experiments.",
+        epilog="Use 'runforge SUBCOMMAND --help' for detailed subcommand options.",
+        formatter_class=_SemanticDefaultsHelpFormatter,
+    )
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
-    plan = subparsers.add_parser("plan", help="create one Git-backed experiment directory without execution")
+    plan = subparsers.add_parser(
+        "plan",
+        help="create one Git-backed experiment directory without execution",
+        description="Create one Git-backed experiment directory without executing its command.",
+        formatter_class=_SemanticDefaultsHelpFormatter,
+    )
     _add_planning_arguments(plan)
 
-    launch = subparsers.add_parser("launch", help="create and immediately run one Git-backed experiment")
+    launch = subparsers.add_parser(
+        "launch",
+        help="create and immediately run one Git-backed experiment",
+        description="Create one Git-backed experiment directory and execute it immediately.",
+        formatter_class=_SemanticDefaultsHelpFormatter,
+    )
     _add_planning_arguments(launch)
     _add_stream_output_argument(launch)
 
-    matrix = subparsers.add_parser("matrix", help="create a pinned-source Cartesian experiment matrix")
-    matrix.add_argument("--matrix-file", type=Path, required=True)
+    matrix = subparsers.add_parser(
+        "matrix",
+        help="create a pinned-source Cartesian experiment matrix",
+        description="Create a Cartesian matrix of plans using one required pinned Git source.",
+        formatter_class=_SemanticDefaultsHelpFormatter,
+    )
+    matrix.add_argument(
+        "--matrix-file",
+        type=Path,
+        required=True,
+        help="JSON object defining matrix parameters (required)",
+    )
     _add_planning_arguments(matrix, pinned_only=True)
 
-    run = subparsers.add_parser("run", help="execute one explicit planned experiment directory")
+    run = subparsers.add_parser(
+        "run",
+        help="execute one explicit planned experiment directory",
+        description="Execute one explicit planned experiment directory.",
+        formatter_class=_SemanticDefaultsHelpFormatter,
+    )
     _add_stream_output_argument(run)
-    run.add_argument("experiment", type=Path)
+    run.add_argument("experiment", type=Path, help="planned experiment directory to execute")
     return parser
 
 
 def _add_planning_arguments(parser: argparse.ArgumentParser, *, pinned_only: bool = False) -> None:
-    parser.add_argument("--name", default="exp")
-    parser.add_argument("--out-dir", type=Path, help="default: SOURCE_REPOSITORY/reports")
-    parser.add_argument("--source-path", type=Path, default=Path("."))
+    parser.add_argument("--name", default="exp", help="short experiment name")
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        help="root directory for experiment outputs (default: SOURCE_REPOSITORY/reports)",
+    )
+    parser.add_argument(
+        "--source-path",
+        type=Path,
+        default=Path("."),
+        help="path within the source Git repository (default: current directory)",
+    )
     if pinned_only:
         parser.set_defaults(source_mode="pinned-git")
     else:
-        parser.add_argument("--source-mode", choices=("current-head", "pinned-git"), default="current-head")
-    parser.add_argument("--commit", required=pinned_only, help="commit or ref for a pinned Git source")
-    parser.add_argument("--patch", type=Path, help="optional patch for a pinned Git source")
-    parser.add_argument("--env-file", type=Path)
+        parser.add_argument(
+            "--source-mode",
+            choices=("current-head", "pinned-git"),
+            default="current-head",
+            help="source selection mode",
+        )
+    commit_requirement = "required" if pinned_only else "default: not set"
+    parser.add_argument(
+        "--commit",
+        required=pinned_only,
+        help=f"commit or ref for a pinned Git source ({commit_requirement})",
+    )
+    parser.add_argument(
+        "--patch",
+        type=Path,
+        help="optional patch for a pinned Git source (default: not set)",
+    )
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        help="KEY=VALUE environment override file (default: not set)",
+    )
     parser.add_argument(
         "--shell",
         action="store_true",
-        help="interpret one command string as an explicit shell pipeline",
+        help="interpret one command string as an explicit shell pipeline (default: disabled)",
     )
-    parser.add_argument("command", nargs=argparse.REMAINDER, help="command after --")
+    parser.add_argument("command", nargs=argparse.REMAINDER, help="experiment command placed after --")
 
 
 def _add_stream_output_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--stream-output",
         action="store_true",
-        help="stream stdout and stderr to the console while preserving log files",
+        help="stream stdout and stderr while preserving log files (default: disabled)",
     )
 
 
-def _plan_with_warnings(arguments: argparse.Namespace) -> Path:
+def _plan_with_warnings(request: PlanRequest) -> Path:
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
-        experiment = _plan(arguments)
+        experiment = plan_experiment(request)
     for captured_warning in captured:
         print(f"warning: {captured_warning.message}", file=sys.stderr)
     return experiment
 
 
-def _plan(arguments: argparse.Namespace) -> Path:
-    return plan_experiment(_planning_request(arguments))
-
-
-def _matrix(arguments: argparse.Namespace) -> tuple[Path, ...]:
+def _matrix_request(arguments: argparse.Namespace) -> MatrixPlanRequest:
     try:
         parameters = load_json_object(arguments.matrix_file)
     except ValueError as error:
         raise PlanningError(str(error)) from error
-    return plan_matrix(MatrixPlanRequest(template=_planning_request(arguments), parameters=parameters))
+    return MatrixPlanRequest(template=_planning_request(arguments), parameters=parameters)
 
 
 def _planning_request(arguments: argparse.Namespace) -> PlanRequest:
@@ -163,3 +240,93 @@ def _environment(path: Path | None) -> dict[str, str]:
             raise PlanningError(f"Empty environment key at {path}:{number}")
         environment[key] = value.strip().strip("'").strip('"')
     return environment
+
+
+def _print_planning_arguments(
+    arguments: argparse.Namespace,
+    request: PlanRequest,
+    *,
+    extra: tuple[tuple[str, str], ...] = (),
+) -> None:
+    rows = [
+        ("name", request.name),
+        ("output root", _effective_output_root(request)),
+        ("source path", _path_text(request.source_path)),
+        ("source mode", arguments.source_mode),
+        ("commit/ref", request.source.commit if request.source is not None else "not set"),
+        ("patch", _optional_path_text(request.source.patch if request.source is not None else None)),
+        ("environment file", _optional_path_text(arguments.env_file)),
+        ("environment keys", _keys_text(request.environment)),
+        ("command mode", request.command.mode),
+        ("shell mode", _boolean_text(request.command.mode == "shell")),
+        ("command", _command_text(request.command)),
+    ]
+    if hasattr(arguments, "stream_output"):
+        rows.append(("stream output", _boolean_text(arguments.stream_output)))
+    rows.extend(extra)
+    _print_effective_arguments(arguments.subcommand, rows)
+
+
+def _print_run_arguments(arguments: argparse.Namespace) -> None:
+    experiment = Path(arguments.experiment).expanduser().resolve()
+    configuration = _configuration_for_summary(experiment)
+    command = _command_text(configuration.command) if configuration is not None else "not available"
+    environment_keys = _keys_text(configuration.environment) if configuration is not None else "not available"
+    _print_effective_arguments(
+        "run",
+        [
+            ("experiment", str(experiment)),
+            ("stream output", _boolean_text(arguments.stream_output)),
+            ("recorded command", command),
+            ("environment keys", environment_keys),
+            ("artifact directory", str(experiment / "artifacts")),
+            ("stdout log", str(experiment / "stdout.log")),
+            ("stderr log", str(experiment / "stderr.log")),
+        ],
+    )
+
+
+def _print_effective_arguments(subcommand: str, rows: Sequence[tuple[str, str]]) -> None:
+    print(f"RunForge {subcommand} effective arguments:", flush=True)
+    for label, value in rows:
+        print(f"  {label}: {value}", flush=True)
+
+
+def _configuration_for_summary(experiment: Path) -> ExperimentConfiguration | None:
+    try:
+        return ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json"))
+    except ValueError:
+        return None
+
+
+def _effective_output_root(request: PlanRequest) -> str:
+    if request.output_root is not None:
+        return _path_text(request.output_root)
+    source_path = request.source.repository if request.source is not None else request.source_path
+    try:
+        return str(GitRepository.locate(source_path).root / "reports")
+    except GitOperationError:
+        return "not resolved (SOURCE_REPOSITORY/reports)"
+
+
+def _command_text(command: ExperimentCommand) -> str:
+    if command.mode == "shell":
+        return command.script or ""
+    return shlex.join(command.arguments)
+
+
+def _path_text(path: Path) -> str:
+    return str(Path(path).expanduser().resolve())
+
+
+def _optional_path_text(path: Path | None) -> str:
+    return _path_text(path) if path is not None else "not set"
+
+
+def _keys_text(values: Mapping[str, object]) -> str:
+    keys = sorted(values)
+    return ", ".join(keys) if keys else "none"
+
+
+def _boolean_text(value: bool) -> str:
+    return "enabled" if value else "disabled"
