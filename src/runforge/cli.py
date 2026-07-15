@@ -15,6 +15,16 @@ from runforge.source_metadata import PinnedGitSource
 from runforge.worker import WorkerError, run_experiment
 
 
+class _SemanticDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+    """Show literal defaults automatically while preserving semantic descriptions."""
+
+    def _get_help_string(self, action: argparse.Action) -> str:
+        help_text = action.help or ""
+        if action.required or "(default:" in help_text:
+            return help_text
+        return super()._get_help_string(action)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the RunForge CLI and return its process exit code."""
     parser = _parser()
@@ -39,50 +49,107 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="runforge", description="Plan or run Git-backed experiments.")
+    parser = argparse.ArgumentParser(
+        prog="runforge",
+        description="Plan, inspect, and run reproducible Git-backed experiments.",
+        epilog="Use 'runforge SUBCOMMAND --help' for detailed subcommand options.",
+        formatter_class=_SemanticDefaultsHelpFormatter,
+    )
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
-    plan = subparsers.add_parser("plan", help="create one Git-backed experiment directory without execution")
+    plan = subparsers.add_parser(
+        "plan",
+        help="create one Git-backed experiment directory without execution",
+        description="Create one Git-backed experiment directory without executing its command.",
+        formatter_class=_SemanticDefaultsHelpFormatter,
+    )
     _add_planning_arguments(plan)
 
-    launch = subparsers.add_parser("launch", help="create and immediately run one Git-backed experiment")
+    launch = subparsers.add_parser(
+        "launch",
+        help="create and immediately run one Git-backed experiment",
+        description="Create one Git-backed experiment directory and execute it immediately.",
+        formatter_class=_SemanticDefaultsHelpFormatter,
+    )
     _add_planning_arguments(launch)
     _add_stream_output_argument(launch)
 
-    matrix = subparsers.add_parser("matrix", help="create a pinned-source Cartesian experiment matrix")
-    matrix.add_argument("--matrix-file", type=Path, required=True)
+    matrix = subparsers.add_parser(
+        "matrix",
+        help="create a pinned-source Cartesian experiment matrix",
+        description="Create a Cartesian matrix of plans using one required pinned Git source.",
+        formatter_class=_SemanticDefaultsHelpFormatter,
+    )
+    matrix.add_argument(
+        "--matrix-file",
+        type=Path,
+        required=True,
+        help="JSON object defining matrix parameters (required)",
+    )
     _add_planning_arguments(matrix, pinned_only=True)
 
-    run = subparsers.add_parser("run", help="execute one explicit planned experiment directory")
+    run = subparsers.add_parser(
+        "run",
+        help="execute one explicit planned experiment directory",
+        description="Execute one explicit planned experiment directory.",
+        formatter_class=_SemanticDefaultsHelpFormatter,
+    )
     _add_stream_output_argument(run)
-    run.add_argument("experiment", type=Path)
+    run.add_argument("experiment", type=Path, help="planned experiment directory to execute")
     return parser
 
 
 def _add_planning_arguments(parser: argparse.ArgumentParser, *, pinned_only: bool = False) -> None:
-    parser.add_argument("--name", default="exp")
-    parser.add_argument("--out-dir", type=Path, help="default: SOURCE_REPOSITORY/reports")
-    parser.add_argument("--source-path", type=Path, default=Path("."))
+    parser.add_argument("--name", default="exp", help="short experiment name")
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        help="root directory for experiment outputs (default: SOURCE_REPOSITORY/reports)",
+    )
+    parser.add_argument(
+        "--source-path",
+        type=Path,
+        default=Path("."),
+        help="path within the source Git repository (default: current directory)",
+    )
     if pinned_only:
         parser.set_defaults(source_mode="pinned-git")
     else:
-        parser.add_argument("--source-mode", choices=("current-head", "pinned-git"), default="current-head")
-    parser.add_argument("--commit", required=pinned_only, help="commit or ref for a pinned Git source")
-    parser.add_argument("--patch", type=Path, help="optional patch for a pinned Git source")
-    parser.add_argument("--env-file", type=Path)
+        parser.add_argument(
+            "--source-mode",
+            choices=("current-head", "pinned-git"),
+            default="current-head",
+            help="source selection mode",
+        )
+    commit_requirement = "required" if pinned_only else "default: not set"
+    parser.add_argument(
+        "--commit",
+        required=pinned_only,
+        help=f"commit or ref for a pinned Git source ({commit_requirement})",
+    )
+    parser.add_argument(
+        "--patch",
+        type=Path,
+        help="optional patch for a pinned Git source (default: not set)",
+    )
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        help="KEY=VALUE environment override file (default: not set)",
+    )
     parser.add_argument(
         "--shell",
         action="store_true",
-        help="interpret one command string as an explicit shell pipeline",
+        help="interpret one command string as an explicit shell pipeline (default: disabled)",
     )
-    parser.add_argument("command", nargs=argparse.REMAINDER, help="command after --")
+    parser.add_argument("command", nargs=argparse.REMAINDER, help="experiment command placed after --")
 
 
 def _add_stream_output_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--stream-output",
         action="store_true",
-        help="stream stdout and stderr to the console while preserving log files",
+        help="stream stdout and stderr while preserving log files (default: disabled)",
     )
 
 
