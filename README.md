@@ -350,3 +350,8 @@ the temporary worktree.
 Use a project-specific report root. If that root is inside the source
 repository, keep it ignored by Git so report files do not become untracked source
 files on subsequent plans.
+
+## License
+
+RunForge is licensed under the
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
