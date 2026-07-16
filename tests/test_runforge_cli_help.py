@@ -67,11 +67,13 @@ def test_retry_help_describes_state_policy_and_safe_defaults(capsys):
     assert "stream stdout and stderr while preserving log files (default: disabled)" in output
 
 
-def test_discover_help_describes_read_only_recursive_scan_default(capsys):
+def test_discover_help_describes_list_and_sequential_execution_defaults(capsys):
     output = _single_line(_help(capsys, "discover"))
 
-    assert "without executing them" in output
+    assert "default mode only lists status" in output
     assert "directory to scan recursively (default: current directory)" in output
+    assert "run created experiments sequentially after discovery (default: disabled; list only)" in output
+    assert "stream stdout and stderr while preserving log files (default: disabled)" in output
 
 
 @pytest.mark.parametrize("subcommand", ["plan", "launch", "matrix", "run", "retry", "discover"])

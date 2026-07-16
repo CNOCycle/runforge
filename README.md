@@ -121,10 +121,11 @@ runforge run --stream-output "$REPO/reports/main/01234567_baseline_0"
 
 RunForge forwards output as the command emits it. Programs that buffer their
 own output must flush it or enable their own unbuffered mode for timely display.
-Regardless of streaming mode, `run`, `launch`, and `retry` print flushed
-preparation, execution, and final success or failure messages so a quiet child
-process is distinguishable from a stalled CLI. In log-only mode, the lifecycle
-messages also identify the active `stdout.log` and `stderr.log` paths.
+Regardless of streaming mode, `run`, `launch`, `retry`, and discovery execution
+print flushed preparation, execution, and final success or failure messages so
+a quiet child process is distinguishable from a stalled CLI. In log-only mode,
+the lifecycle messages also identify the active `stdout.log` and `stderr.log`
+paths.
 
 ## Retry A Failed Or Interrupted Experiment
 
@@ -221,9 +222,39 @@ line in deterministic path order. Each line includes its state, attempt, name,
 source identifier, and experiment path. A summary reports counts for
 `created`, `init`, `inprogress`, `completed`, `failed`, and invalid candidates.
 
-This command is read-only. It does not execute experiments or modify their
-status. Missing or malformed `config.json`/`status.json` pairs are reported
-individually, and the command returns status `2` when any are found.
+Without `--execute`, this command is read-only. It does not execute experiments
+or modify their status. Missing or malformed `config.json`/`status.json` pairs
+are reported individually, and the command returns status `2` when any are
+found.
+
+Add `--execute` to run every discovered plan whose status is `created`:
+
+```bash
+runforge discover "$REPORT_ROOT" --execute
+```
+
+The command takes one discovery snapshot, runs eligible experiments
+sequentially in deterministic path order using the normal worker, and continues
+after individual failures. Plans in `init`, `inprogress`, `completed`, or
+`failed` remain visible but are skipped. Plans published after the scan wait
+for the next invocation.
+
+By default, child output remains in each experiment's `stdout.log` and
+`stderr.log`. Add `--stream-output` with `--execute` to also show it in the
+console:
+
+```bash
+runforge discover "$REPORT_ROOT" --execute --stream-output
+```
+
+The execution summary reports selected, completed, failed, skipped, and invalid
+counts. Exit status is `0` when every selected plan succeeds, `1` when any
+selected plan fails, and `2` when discovery or metadata is invalid. Valid
+created plans are still attempted when another candidate is invalid.
+
+This first executor is intended for one controlling process. It does not claim
+plans atomically, so do not run concurrent `discover --execute` processes
+against the same report root.
 
 ## Where To Save Results
 

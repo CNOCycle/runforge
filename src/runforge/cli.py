@@ -163,8 +163,10 @@ def _parser() -> argparse.ArgumentParser:
 
     discover = subparsers.add_parser(
         "discover",
-        help="list planned experiments recursively",
-        description="Recursively inspect planned experiments without executing them.",
+        help="list or sequentially execute planned experiments recursively",
+        description=(
+            "Recursively inspect planned experiments. The default mode only lists status; execution requires --execute."
+        ),
         formatter_class=_SemanticDefaultsHelpFormatter,
     )
     discover.add_argument(
@@ -174,6 +176,12 @@ def _parser() -> argparse.ArgumentParser:
         default=Path("."),
         help="directory to scan recursively (default: current directory)",
     )
+    discover.add_argument(
+        "--execute",
+        action="store_true",
+        help="run created experiments sequentially after discovery (default: disabled; list only)",
+    )
+    _add_stream_output_argument(discover)
     return parser
 
 
@@ -232,9 +240,13 @@ def _add_stream_output_argument(parser: argparse.ArgumentParser) -> None:
 
 
 def _discover(arguments: argparse.Namespace) -> int:
+    if arguments.stream_output and not arguments.execute:
+        raise ValueError("--stream-output requires --execute")
     result = discover_experiments(arguments.root)
     _print_discovery(result)
-    return 2 if result.diagnostics else 0
+    if not arguments.execute:
+        return 2 if result.diagnostics else 0
+    return _execute_discovered(result, stream_output=arguments.stream_output)
 
 
 def _print_discovery(result: DiscoveryResult) -> None:
@@ -258,6 +270,37 @@ def _print_discovery(result: DiscoveryResult) -> None:
     for state in _DISCOVERY_STATES:
         print(f"  {state}: {counts[state]}")
     print(f"  invalid: {len(result.diagnostics)}")
+
+
+def _execute_discovered(result: DiscoveryResult, *, stream_output: bool) -> int:
+    selected = tuple(experiment for experiment in result.experiments if experiment.status.state == "created")
+    completed = 0
+    failed = 0
+    for index, experiment in enumerate(selected, start=1):
+        print(f"Selected experiment ({index}/{len(selected)}): {experiment.path}", flush=True)
+        try:
+            exit_code = run_experiment(
+                experiment.path,
+                stream_output=stream_output,
+                progress=_print_worker_progress,
+            )
+        except WorkerError:
+            failed += 1
+            continue
+        if exit_code == 0:
+            completed += 1
+        else:
+            failed += 1
+
+    print("Execution summary:")
+    print(f"  selected: {len(selected)}")
+    print(f"  completed: {completed}")
+    print(f"  failed: {failed}")
+    print(f"  skipped: {len(result.experiments) - len(selected)}")
+    print(f"  invalid: {len(result.diagnostics)}")
+    if result.diagnostics:
+        return 2
+    return 1 if failed else 0
 
 
 def _plan_with_warnings(request: PlanRequest) -> Path:
@@ -395,7 +438,11 @@ def _print_retry_arguments(arguments: argparse.Namespace) -> None:
 def _print_discover_arguments(arguments: argparse.Namespace) -> None:
     _print_effective_arguments(
         "discover",
-        [("root", _path_text(arguments.root))],
+        [
+            ("root", _path_text(arguments.root)),
+            ("execute", _boolean_text(arguments.execute)),
+            ("stream output", _boolean_text(arguments.stream_output)),
+        ],
     )
 
 
