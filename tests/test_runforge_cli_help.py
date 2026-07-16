@@ -22,7 +22,7 @@ def test_top_level_help_lists_every_command_and_subcommand_guidance(capsys):
     output = _help(capsys)
 
     assert "Plan, inspect, and run reproducible Git-backed experiments." in output
-    for subcommand in ("plan", "launch", "matrix", "run"):
+    for subcommand in ("plan", "launch", "matrix", "run", "retry"):
         assert subcommand in output
     assert "runforge SUBCOMMAND --help" in output
 
@@ -58,7 +58,16 @@ def test_run_help_describes_safe_execution_defaults(capsys):
     assert "stream stdout and stderr while preserving log files (default: disabled)" in run_output
 
 
-@pytest.mark.parametrize("subcommand", ["plan", "launch", "matrix", "run"])
+def test_retry_help_describes_state_policy_and_safe_defaults(capsys):
+    output = _single_line(_help(capsys, "retry"))
+
+    assert "failed experiment" in output
+    assert "inprogress experiment additionally requires --force" in output
+    assert "independently confirming its worker stopped (default: disabled)" in output
+    assert "stream stdout and stderr while preserving log files (default: disabled)" in output
+
+
+@pytest.mark.parametrize("subcommand", ["plan", "launch", "matrix", "run", "retry"])
 def test_subcommand_help_never_exposes_raw_python_defaults(capsys, subcommand):
     output = _help(capsys, subcommand)
 

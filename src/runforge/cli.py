@@ -9,10 +9,11 @@ import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from runforge.experiment_schema import ExperimentCommand, ExperimentConfiguration
+from runforge.experiment_schema import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.git_ops import GitOperationError, GitRepository
 from runforge.json_store import load_json_object
 from runforge.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
+from runforge.retry import RetryError, prepare_retry
 from runforge.source_metadata import PinnedGitSource
 from runforge.worker import WorkerError, run_experiment
 
@@ -55,9 +56,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             if arguments.subcommand == "launch":
                 return run_experiment(experiment, stream_output=arguments.stream_output)
             return 0
+        if arguments.subcommand == "retry":
+            _print_retry_arguments(arguments)
+            preparation = prepare_retry(arguments.experiment, force=arguments.force)
+            if preparation.forced:
+                print(
+                    "warning: Forced retry cannot prove that the previous inprogress worker has stopped",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            print(f"Previous attempt archived at: {preparation.archive}", flush=True)
+            return run_experiment(preparation.experiment, stream_output=arguments.stream_output)
         _print_run_arguments(arguments)
         return run_experiment(arguments.experiment, stream_output=arguments.stream_output)
-    except (PlanningError, WorkerError, ValueError) as error:
+    except (PlanningError, RetryError, WorkerError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
@@ -110,6 +122,23 @@ def _parser() -> argparse.ArgumentParser:
     )
     _add_stream_output_argument(run)
     run.add_argument("experiment", type=Path, help="planned experiment directory to execute")
+
+    retry = subparsers.add_parser(
+        "retry",
+        help="archive and rerun one failed or interrupted experiment",
+        description=(
+            "Archive the previous outputs and immediately rerun one failed experiment. "
+            "An inprogress experiment additionally requires --force."
+        ),
+        formatter_class=_SemanticDefaultsHelpFormatter,
+    )
+    _add_stream_output_argument(retry)
+    retry.add_argument(
+        "--force",
+        action="store_true",
+        help="retry an inprogress experiment after independently confirming its worker stopped (default: disabled)",
+    )
+    retry.add_argument("experiment", type=Path, help="failed or interrupted experiment directory to retry")
     return parser
 
 
@@ -269,19 +298,32 @@ def _print_planning_arguments(
 
 def _print_run_arguments(arguments: argparse.Namespace) -> None:
     experiment = Path(arguments.experiment).expanduser().resolve()
-    configuration = _configuration_for_summary(experiment)
-    command = _command_text(configuration.command) if configuration is not None else "not available"
-    environment_keys = _keys_text(configuration.environment) if configuration is not None else "not available"
     _print_effective_arguments(
         "run",
         [
             ("experiment", str(experiment)),
             ("stream output", _boolean_text(arguments.stream_output)),
-            ("recorded command", command),
-            ("environment keys", environment_keys),
-            ("artifact directory", str(experiment / "artifacts")),
-            ("stdout log", str(experiment / "stdout.log")),
-            ("stderr log", str(experiment / "stderr.log")),
+            *_execution_summary_rows(experiment),
+        ],
+    )
+
+
+def _print_retry_arguments(arguments: argparse.Namespace) -> None:
+    experiment = Path(arguments.experiment).expanduser().resolve()
+    status = _status_for_summary(experiment)
+    current_state = status.state if status is not None else "not available"
+    current_attempt = str(status.attempt) if status is not None else "not available"
+    next_attempt = str(status.attempt + 1) if status is not None else "not available"
+    _print_effective_arguments(
+        "retry",
+        [
+            ("experiment", str(experiment)),
+            ("force", _boolean_text(arguments.force)),
+            ("stream output", _boolean_text(arguments.stream_output)),
+            ("current state", current_state),
+            ("current attempt", current_attempt),
+            ("next attempt", next_attempt),
+            *_execution_summary_rows(experiment),
         ],
     )
 
@@ -295,6 +337,26 @@ def _print_effective_arguments(subcommand: str, rows: Sequence[tuple[str, str]])
 def _configuration_for_summary(experiment: Path) -> ExperimentConfiguration | None:
     try:
         return ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json"))
+    except ValueError:
+        return None
+
+
+def _execution_summary_rows(experiment: Path) -> list[tuple[str, str]]:
+    configuration = _configuration_for_summary(experiment)
+    command = _command_text(configuration.command) if configuration is not None else "not available"
+    environment_keys = _keys_text(configuration.environment) if configuration is not None else "not available"
+    return [
+        ("recorded command", command),
+        ("environment keys", environment_keys),
+        ("artifact directory", str(experiment / "artifacts")),
+        ("stdout log", str(experiment / "stdout.log")),
+        ("stderr log", str(experiment / "stderr.log")),
+    ]
+
+
+def _status_for_summary(experiment: Path) -> ExperimentStatus | None:
+    try:
+        return ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
     except ValueError:
         return None
 
