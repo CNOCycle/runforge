@@ -122,6 +122,35 @@ runforge run --stream-output "$REPO/reports/main/01234567_baseline_0"
 RunForge forwards output as the command emits it. Programs that buffer their
 own output must flush it or enable their own unbuffered mode for timely display.
 
+## Retry A Failed Or Interrupted Experiment
+
+Retry starts another execution of the same immutable experiment configuration;
+it does not resume the previous process or select a training checkpoint:
+
+```bash
+runforge retry --stream-output "$REPO/reports/main/01234567_baseline_0"
+```
+
+A normal retry accepts a `failed` experiment. An experiment left in
+`inprogress` after an interruption requires explicit confirmation that the old
+process has stopped:
+
+```bash
+runforge retry --force --stream-output \
+  "$REPO/reports/main/01234567_baseline_0"
+```
+
+`--force` is a single-controller escape hatch. RunForge cannot yet prove that
+another worker is inactive, so using it while the original process is still
+running can execute the experiment twice. Completed experiments cannot be
+retried; create a new plan for another intentional successful run. Experiments
+in `created` or `init` remain runnable with `run`.
+
+Before execution, retry archives the previous `status.json`, logs, and artifacts
+under `attempt-NNNN/`, creates an empty `artifacts/` directory, and
+resets the status for the normal worker. The worker increments `attempt` when
+the new command starts.
+
 ## Pinned Git Source
 
 Use pinned mode when the intended source is an explicit commit or ref rather
@@ -243,6 +272,7 @@ REPORT_ROOT/
       stdout.log
       stderr.log
       artifacts/
+      attempt-NNNN/    # prior retry status snapshot, logs, and artifacts
 ```
 
 The lifecycle is `created -> init -> inprogress -> completed|failed`.
@@ -267,4 +297,3 @@ the temporary worktree.
 Use a project-specific report root. If that root is inside the source
 repository, keep it ignored by Git so report files do not become untracked source
 files on subsequent plans.
-

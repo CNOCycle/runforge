@@ -9,6 +9,7 @@ from runforge.planner import (
     plan_experiment,
     plan_matrix,
 )
+from runforge.retry import RetryError, RetryPreparation, prepare_retry
 from runforge.source_metadata import PinnedGitSource
 from runforge.worker import WorkerError, run_experiment
 
@@ -22,9 +23,12 @@ __all__ = [
     "PinnedGitSource",
     "PlanRequest",
     "PlanningError",
+    "RetryError",
+    "RetryPreparation",
     "WorkerError",
     "plan_experiment",
     "plan_matrix",
+    "prepare_retry",
     "run_experiment",
 ]
 
