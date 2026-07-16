@@ -6,16 +6,21 @@ import argparse
 import shlex
 import sys
 import warnings
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from runforge.discovery import DiscoveryError, DiscoveryResult, discover_experiments
 from runforge.experiment_schema import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.git_ops import GitOperationError, GitRepository
 from runforge.json_store import load_json_object
 from runforge.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
 from runforge.retry import RetryError, prepare_retry
 from runforge.source_metadata import PinnedGitSource
-from runforge.worker import WorkerError, run_experiment
+from runforge.worker import WorkerError, WorkerProgressEvent, run_experiment
+
+
+_DISCOVERY_STATES = ("created", "init", "inprogress", "completed", "failed")
 
 
 class _SemanticDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
@@ -33,6 +38,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     arguments = parser.parse_args(argv)
     try:
+        if arguments.subcommand == "discover":
+            _print_discover_arguments(arguments)
+            return _discover(arguments)
         if arguments.subcommand == "matrix":
             request = _matrix_request(arguments)
             _print_planning_arguments(
@@ -53,9 +61,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_planning_arguments(arguments, request)
             experiment = _plan_with_warnings(request)
             print(f"Experiment plan created at: {experiment}", flush=True)
+            exit_code = 0
             if arguments.subcommand == "launch":
-                return run_experiment(experiment, stream_output=arguments.stream_output)
-            return 0
+                exit_code = run_experiment(
+                    experiment,
+                    stream_output=arguments.stream_output,
+                    progress=_print_worker_progress,
+                )
+            return exit_code
         if arguments.subcommand == "retry":
             _print_retry_arguments(arguments)
             preparation = prepare_retry(arguments.experiment, force=arguments.force)
@@ -66,10 +79,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                     flush=True,
                 )
             print(f"Previous attempt archived at: {preparation.archive}", flush=True)
-            return run_experiment(preparation.experiment, stream_output=arguments.stream_output)
+            return run_experiment(
+                preparation.experiment,
+                stream_output=arguments.stream_output,
+                progress=_print_worker_progress,
+            )
         _print_run_arguments(arguments)
-        return run_experiment(arguments.experiment, stream_output=arguments.stream_output)
-    except (PlanningError, RetryError, WorkerError, ValueError) as error:
+        return run_experiment(
+            arguments.experiment,
+            stream_output=arguments.stream_output,
+            progress=_print_worker_progress,
+        )
+    except (DiscoveryError, PlanningError, RetryError, WorkerError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
@@ -139,6 +160,28 @@ def _parser() -> argparse.ArgumentParser:
         help="retry an inprogress experiment after independently confirming its worker stopped (default: disabled)",
     )
     retry.add_argument("experiment", type=Path, help="failed or interrupted experiment directory to retry")
+
+    discover = subparsers.add_parser(
+        "discover",
+        help="list or sequentially execute planned experiments recursively",
+        description=(
+            "Recursively inspect planned experiments. The default mode only lists status; execution requires --execute."
+        ),
+        formatter_class=_SemanticDefaultsHelpFormatter,
+    )
+    discover.add_argument(
+        "root",
+        type=Path,
+        nargs="?",
+        default=Path("."),
+        help="directory to scan recursively (default: current directory)",
+    )
+    discover.add_argument(
+        "--execute",
+        action="store_true",
+        help="run created experiments sequentially after discovery (default: disabled; list only)",
+    )
+    _add_stream_output_argument(discover)
     return parser
 
 
@@ -194,6 +237,70 @@ def _add_stream_output_argument(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="stream stdout and stderr while preserving log files (default: disabled)",
     )
+
+
+def _discover(arguments: argparse.Namespace) -> int:
+    if arguments.stream_output and not arguments.execute:
+        raise ValueError("--stream-output requires --execute")
+    result = discover_experiments(arguments.root)
+    _print_discovery(result)
+    if not arguments.execute:
+        return 2 if result.diagnostics else 0
+    return _execute_discovered(result, stream_output=arguments.stream_output)
+
+
+def _print_discovery(result: DiscoveryResult) -> None:
+    print(f"Experiments discovered under: {result.root}")
+    if result.experiments:
+        for experiment in result.experiments:
+            source = experiment.configuration.source
+            print(
+                f"{experiment.status.state} | attempt={experiment.status.attempt} "
+                f"| name={experiment.configuration.name} | source={source.branch}@{source.commit[:8]} "
+                f"| path={experiment.path}"
+            )
+    else:
+        print("No experiments found.")
+
+    for diagnostic in result.diagnostics:
+        print(f"invalid | path={diagnostic.path} | error={diagnostic.message}", file=sys.stderr)
+
+    counts = Counter(experiment.status.state for experiment in result.experiments)
+    print("Summary:")
+    for state in _DISCOVERY_STATES:
+        print(f"  {state}: {counts[state]}")
+    print(f"  invalid: {len(result.diagnostics)}")
+
+
+def _execute_discovered(result: DiscoveryResult, *, stream_output: bool) -> int:
+    selected = tuple(experiment for experiment in result.experiments if experiment.status.state == "created")
+    completed = 0
+    failed = 0
+    for index, experiment in enumerate(selected, start=1):
+        print(f"Selected experiment ({index}/{len(selected)}): {experiment.path}", flush=True)
+        try:
+            exit_code = run_experiment(
+                experiment.path,
+                stream_output=stream_output,
+                progress=_print_worker_progress,
+            )
+        except WorkerError:
+            failed += 1
+            continue
+        if exit_code == 0:
+            completed += 1
+        else:
+            failed += 1
+
+    print("Execution summary:")
+    print(f"  selected: {len(selected)}")
+    print(f"  completed: {completed}")
+    print(f"  failed: {failed}")
+    print(f"  skipped: {len(result.experiments) - len(selected)}")
+    print(f"  invalid: {len(result.diagnostics)}")
+    if result.diagnostics:
+        return 2
+    return 1 if failed else 0
 
 
 def _plan_with_warnings(request: PlanRequest) -> Path:
@@ -328,6 +435,17 @@ def _print_retry_arguments(arguments: argparse.Namespace) -> None:
     )
 
 
+def _print_discover_arguments(arguments: argparse.Namespace) -> None:
+    _print_effective_arguments(
+        "discover",
+        [
+            ("root", _path_text(arguments.root)),
+            ("execute", _boolean_text(arguments.execute)),
+            ("stream output", _boolean_text(arguments.stream_output)),
+        ],
+    )
+
+
 def _print_effective_arguments(subcommand: str, rows: Sequence[tuple[str, str]]) -> None:
     print(f"RunForge {subcommand} effective arguments:", flush=True)
     for label, value in rows:
@@ -392,3 +510,26 @@ def _keys_text(values: Mapping[str, object]) -> str:
 
 def _boolean_text(value: bool) -> str:
     return "enabled" if value else "disabled"
+
+
+def _print_worker_progress(event: WorkerProgressEvent) -> None:
+    if event.phase == "preparing":
+        print(f"Preparing experiment: {event.experiment}", flush=True)
+        return
+    if event.phase == "executing":
+        command = _command_text(event.command) if event.command is not None else "not available"
+        print(f"Executing command: {command}", flush=True)
+        if event.stream_output:
+            print("  output mode: streaming and logging", flush=True)
+        else:
+            print(f"  stdout log: {event.stdout_log}", flush=True)
+            print(f"  stderr log: {event.stderr_log}", flush=True)
+        return
+    if event.phase == "completed":
+        print(f"Experiment completed with exit code {event.exit_code}: {event.experiment}", flush=True)
+        return
+    if event.exit_code is not None:
+        message = f"Experiment failed with exit code {event.exit_code}: {event.experiment}"
+    else:
+        message = f"Experiment failed: {event.experiment}: {event.error}"
+    print(message, file=sys.stderr, flush=True)

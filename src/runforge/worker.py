@@ -8,11 +8,12 @@ import subprocess
 import sys
 import tempfile
 import threading
-from dataclasses import replace
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import BinaryIO, TextIO
+from typing import BinaryIO, Literal, TextIO
 
-from runforge.experiment_schema import ExperimentConfiguration, ExperimentStatus
+from runforge.experiment_schema import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.git_ops import GitOperationError, GitRepository
 from runforge.json_store import load_json_object, save_json_object
 from runforge.time_utils import utc_now
@@ -22,26 +23,77 @@ class WorkerError(RuntimeError):
     """Raised when one planned experiment cannot be prepared or executed."""
 
 
-def run_experiment(experiment_path: Path, *, stream_output: bool = False) -> int:
+@dataclass(frozen=True)
+class WorkerProgressEvent:
+    """One observable worker lifecycle transition."""
+
+    phase: Literal["preparing", "executing", "completed", "failed"]
+    experiment: Path
+    stdout_log: Path
+    stderr_log: Path
+    stream_output: bool
+    command: ExperimentCommand | None = None
+    exit_code: int | None = None
+    error: str | None = None
+
+
+def run_experiment(
+    experiment_path: Path,
+    *,
+    stream_output: bool = False,
+    progress: Callable[[WorkerProgressEvent], None] | None = None,
+) -> int:
     """Run one explicit experiment directory and return its command exit code."""
     experiment = Path(experiment_path).expanduser().resolve()
+    _notify_progress(progress, _progress_event("preparing", experiment, stream_output))
     if not experiment.is_dir():
-        raise WorkerError(f"Experiment directory does not exist: {experiment}")
+        error = WorkerError(f"Experiment directory does not exist: {experiment}")
+        _notify_progress(
+            progress,
+            replace(_progress_event("failed", experiment, stream_output), error=str(error)),
+        )
+        raise error
     try:
         configuration = ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json"))
         status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
     except ValueError as error:
-        raise WorkerError(str(error)) from error
+        failure = WorkerError(str(error))
+        _notify_progress(
+            progress,
+            replace(_progress_event("failed", experiment, stream_output), error=str(failure)),
+        )
+        raise failure from error
     if status.state not in {"created", "init"}:
-        raise WorkerError(f"Experiment is not runnable from state {status.state!r}")
+        error = WorkerError(f"Experiment is not runnable from state {status.state!r}")
+        _notify_progress(
+            progress,
+            replace(
+                _progress_event("failed", experiment, stream_output, command=configuration.command),
+                error=str(error),
+            ),
+        )
+        raise error
 
-    status = _save_status(experiment, replace(status, state="init", updated_at=utc_now(), error=None))
     try:
-        return _execute(experiment, configuration, status, stream_output=stream_output)
+        status = _save_status(experiment, replace(status, state="init", updated_at=utc_now(), error=None))
+        exit_code = _execute(
+            experiment,
+            configuration,
+            status,
+            stream_output=stream_output,
+            progress=progress,
+        )
     except WorkerError as error:
         _save_status(
             experiment,
             replace(status, state="failed", updated_at=utc_now(), finished_at=utc_now(), error=str(error)),
+        )
+        _notify_progress(
+            progress,
+            replace(
+                _progress_event("failed", experiment, stream_output, command=configuration.command),
+                error=str(error),
+            ),
         )
         raise
     except OSError as error:
@@ -50,7 +102,25 @@ def run_experiment(experiment_path: Path, *, stream_output: bool = False) -> int
             experiment,
             replace(status, state="failed", updated_at=utc_now(), finished_at=utc_now(), error=str(failure)),
         )
+        _notify_progress(
+            progress,
+            replace(
+                _progress_event("failed", experiment, stream_output, command=configuration.command),
+                error=str(failure),
+            ),
+        )
         raise failure from error
+    phase = "completed" if exit_code == 0 else "failed"
+    event_error = None if exit_code == 0 else f"Command exited with status {exit_code}"
+    _notify_progress(
+        progress,
+        replace(
+            _progress_event(phase, experiment, stream_output, command=configuration.command),
+            exit_code=exit_code,
+            error=event_error,
+        ),
+    )
+    return exit_code
 
 
 def _execute(
@@ -59,6 +129,7 @@ def _execute(
     status: ExperimentStatus,
     *,
     stream_output: bool,
+    progress: Callable[[WorkerProgressEvent], None] | None,
 ) -> int:
     try:
         repository = GitRepository.locate(configuration.source.repository)
@@ -80,6 +151,15 @@ def _execute(
                     attempt=status.attempt + 1,
                     updated_at=utc_now(),
                     started_at=utc_now(),
+                ),
+            )
+            _notify_progress(
+                progress,
+                _progress_event(
+                    "executing",
+                    experiment,
+                    stream_output,
+                    command=configuration.command,
                 ),
             )
             exit_code = _run_command(experiment, worktree, configuration, stream_output=stream_output)
@@ -239,3 +319,33 @@ def _write_console(console: TextIO, chunk: bytes) -> None:
 def _save_status(experiment: Path, status: ExperimentStatus) -> ExperimentStatus:
     save_json_object(experiment / "status.json", status.to_dict())
     return status
+
+
+def _progress_event(
+    phase: Literal["preparing", "executing", "completed", "failed"],
+    experiment: Path,
+    stream_output: bool,
+    *,
+    command: ExperimentCommand | None = None,
+) -> WorkerProgressEvent:
+    return WorkerProgressEvent(
+        phase=phase,
+        experiment=experiment,
+        stdout_log=experiment / "stdout.log",
+        stderr_log=experiment / "stderr.log",
+        stream_output=stream_output,
+        command=command,
+    )
+
+
+def _notify_progress(
+    progress: Callable[[WorkerProgressEvent], None] | None,
+    event: WorkerProgressEvent,
+) -> None:
+    if progress is None:
+        return
+    try:
+        progress(event)
+    except Exception:
+        # Progress reporting is observational and must not change experiment outcomes.
+        return
