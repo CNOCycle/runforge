@@ -72,7 +72,12 @@ def test_cli_plans_and_runs_one_explicit_experiment(tmp_path, capsys):
 
     assert experiment.is_dir()
     assert main(["run", "--stream-output", str(experiment)]) == 0
-    assert "planned command ran" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert f"Preparing experiment: {experiment}" in output
+    assert "Executing command: python train.py" in output
+    assert "  output mode: streaming and logging" in output
+    assert "planned command ran" in output
+    assert f"Experiment completed with exit code 0: {experiment}" in output
 
 
 def test_cli_rejects_missing_command(capsys):
@@ -218,7 +223,10 @@ def test_cli_launches_a_new_experiment_immediately(tmp_path, capsys):
     experiment = _planned_path(output)
     assert "RunForge launch effective arguments:" in output
     assert "  stream output: enabled" in output
+    assert f"Preparing experiment: {experiment}" in output
+    assert "Executing command: python train.py" in output
     assert "planned command ran" in output
+    assert f"Experiment completed with exit code 0: {experiment}" in output
     status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
 
     assert status.state == "completed"

@@ -11,7 +11,7 @@ from runforge.planner import (
 )
 from runforge.retry import RetryError, RetryPreparation, prepare_retry
 from runforge.source_metadata import PinnedGitSource
-from runforge.worker import WorkerError, run_experiment
+from runforge.worker import WorkerError, WorkerProgressEvent, run_experiment
 
 
 __all__ = [
@@ -26,6 +26,7 @@ __all__ = [
     "RetryError",
     "RetryPreparation",
     "WorkerError",
+    "WorkerProgressEvent",
     "plan_experiment",
     "plan_matrix",
     "prepare_retry",

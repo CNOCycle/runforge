@@ -114,10 +114,14 @@ def test_retry_archives_failed_attempt_prints_effective_arguments_and_executes(t
     assert "  environment keys: API_TOKEN, MARKER" in output
     assert f"  artifact directory: {experiment / 'artifacts'}" in output
     assert f"Previous attempt archived at: {archive}" in output
+    assert f"Preparing experiment: {experiment}" in output
+    assert "Executing command: python train.py" in output
     assert "retry succeeded" in output
+    assert f"Experiment completed with exit code 0: {experiment}" in output
     assert "very-secret" not in output
     assert output.index("RunForge retry effective arguments:") < output.index("Previous attempt archived at:")
-    assert output.index("Previous attempt archived at:") < output.index("retry succeeded")
+    assert output.index("Previous attempt archived at:") < output.index("Preparing experiment:")
+    assert output.index("Executing command:") < output.index("retry succeeded")
     assert _status(experiment).state == "completed"
     assert _status(experiment).attempt == SECOND_ATTEMPT
     assert (archive / "stdout.log").read_text(encoding="utf-8") == "first attempt failed\n"

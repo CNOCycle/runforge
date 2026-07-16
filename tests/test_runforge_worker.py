@@ -5,11 +5,13 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from runforge.experiment_schema import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.json_store import load_json_object
 from runforge.planner import PlanRequest, plan_experiment
 from runforge.source_metadata import PinnedGitSource
-from runforge.worker import run_experiment
+from runforge.worker import WorkerError, WorkerProgressEvent, run_experiment
 
 
 FAILURE_EXIT_CODE = 7
@@ -146,3 +148,65 @@ def test_worker_streams_output_to_console_and_preserves_logs(tmp_path, capsys):
     assert captured.err == "live err\n"
     assert (experiment / "stdout.log").read_text(encoding="utf-8") == "live out\n"
     assert (experiment / "stderr.log").read_text(encoding="utf-8") == "live err\n"
+
+
+def test_worker_reports_successful_lifecycle_without_changing_its_result(tmp_path):
+    repository = _repository(tmp_path, "print('done')\n")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="progress",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=tmp_path / "reports",
+        )
+    )
+    events: list[WorkerProgressEvent] = []
+
+    assert run_experiment(experiment, progress=events.append) == 0
+
+    assert [event.phase for event in events] == ["preparing", "executing", "completed"]
+    assert all(event.experiment == experiment for event in events)
+    assert all(event.stdout_log == experiment / "stdout.log" for event in events)
+    assert all(event.stderr_log == experiment / "stderr.log" for event in events)
+    assert events[0].command is None
+    assert events[1].command == ExperimentCommand.argv(("python", "train.py"))
+    assert events[2].exit_code == 0
+    assert events[2].error is None
+
+
+def test_worker_reports_nonzero_exit_and_ignores_progress_callback_errors(tmp_path):
+    repository = _repository(tmp_path, "raise SystemExit(7)\n")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="failed-progress",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=tmp_path / "reports",
+        )
+    )
+    events: list[WorkerProgressEvent] = []
+
+    def progress(event: WorkerProgressEvent) -> None:
+        events.append(event)
+        if event.phase == "executing":
+            raise RuntimeError("observer failed")
+
+    assert run_experiment(experiment, progress=progress) == FAILURE_EXIT_CODE
+
+    assert [event.phase for event in events] == ["preparing", "executing", "failed"]
+    assert events[-1].exit_code == FAILURE_EXIT_CODE
+    assert events[-1].error == "Command exited with status 7"
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    assert status.state == "failed"
+    assert status.exit_code == FAILURE_EXIT_CODE
+
+
+def test_worker_reports_preparation_failure(tmp_path):
+    experiment = tmp_path / "missing"
+    events: list[WorkerProgressEvent] = []
+
+    with pytest.raises(WorkerError, match="Experiment directory does not exist"):
+        run_experiment(experiment, progress=events.append)
+
+    assert [event.phase for event in events] == ["preparing", "failed"]
+    assert events[-1].error == f"Experiment directory does not exist: {experiment}"

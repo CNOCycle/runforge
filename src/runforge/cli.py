@@ -15,7 +15,7 @@ from runforge.json_store import load_json_object
 from runforge.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
 from runforge.retry import RetryError, prepare_retry
 from runforge.source_metadata import PinnedGitSource
-from runforge.worker import WorkerError, run_experiment
+from runforge.worker import WorkerError, WorkerProgressEvent, run_experiment
 
 
 class _SemanticDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
@@ -54,7 +54,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             experiment = _plan_with_warnings(request)
             print(f"Experiment plan created at: {experiment}", flush=True)
             if arguments.subcommand == "launch":
-                return run_experiment(experiment, stream_output=arguments.stream_output)
+                return run_experiment(
+                    experiment,
+                    stream_output=arguments.stream_output,
+                    progress=_print_worker_progress,
+                )
             return 0
         if arguments.subcommand == "retry":
             _print_retry_arguments(arguments)
@@ -66,9 +70,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     flush=True,
                 )
             print(f"Previous attempt archived at: {preparation.archive}", flush=True)
-            return run_experiment(preparation.experiment, stream_output=arguments.stream_output)
+            return run_experiment(
+                preparation.experiment,
+                stream_output=arguments.stream_output,
+                progress=_print_worker_progress,
+            )
         _print_run_arguments(arguments)
-        return run_experiment(arguments.experiment, stream_output=arguments.stream_output)
+        return run_experiment(
+            arguments.experiment,
+            stream_output=arguments.stream_output,
+            progress=_print_worker_progress,
+        )
     except (PlanningError, RetryError, WorkerError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -392,3 +404,26 @@ def _keys_text(values: Mapping[str, object]) -> str:
 
 def _boolean_text(value: bool) -> str:
     return "enabled" if value else "disabled"
+
+
+def _print_worker_progress(event: WorkerProgressEvent) -> None:
+    if event.phase == "preparing":
+        print(f"Preparing experiment: {event.experiment}", flush=True)
+        return
+    if event.phase == "executing":
+        command = _command_text(event.command) if event.command is not None else "not available"
+        print(f"Executing command: {command}", flush=True)
+        if event.stream_output:
+            print("  output mode: streaming and logging", flush=True)
+        else:
+            print(f"  stdout log: {event.stdout_log}", flush=True)
+            print(f"  stderr log: {event.stderr_log}", flush=True)
+        return
+    if event.phase == "completed":
+        print(f"Experiment completed with exit code {event.exit_code}: {event.experiment}", flush=True)
+        return
+    if event.exit_code is not None:
+        message = f"Experiment failed with exit code {event.exit_code}: {event.experiment}"
+    else:
+        message = f"Experiment failed: {event.experiment}: {event.error}"
+    print(message, file=sys.stderr, flush=True)

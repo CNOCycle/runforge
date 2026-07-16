@@ -121,6 +121,10 @@ runforge run --stream-output "$REPO/reports/main/01234567_baseline_0"
 
 RunForge forwards output as the command emits it. Programs that buffer their
 own output must flush it or enable their own unbuffered mode for timely display.
+Regardless of streaming mode, `run`, `launch`, and `retry` print flushed
+preparation, execution, and final success or failure messages so a quiet child
+process is distinguishable from a stalled CLI. In log-only mode, the lifecycle
+messages also identify the active `stdout.log` and `stderr.log` paths.
 
 ## Retry A Failed Or Interrupted Experiment
 

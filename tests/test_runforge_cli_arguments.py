@@ -97,4 +97,7 @@ def test_run_summary_uses_recorded_configuration_without_environment_values(tmp_
     assert f"  artifact directory: {experiment / 'artifacts'}" in output
     assert f"  stdout log: {experiment / 'stdout.log'}" in output
     assert f"  stderr log: {experiment / 'stderr.log'}" in output
+    assert f"Preparing experiment: {experiment}" in output
+    assert "Executing command: python train.py" in output
+    assert f"Experiment completed with exit code 0: {experiment}" in output
     assert "very-secret" not in output
