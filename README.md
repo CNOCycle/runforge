@@ -207,6 +207,24 @@ Matrix planning resolves and validates the source once, validates every
 combination before publication, and does not execute any experiment. Use
 `runforge run EXPERIMENT_DIRECTORY` for each resulting plan.
 
+## Discover Planned Experiments
+
+Inspect every RunForge experiment below a report root with:
+
+```bash
+runforge discover "$REPORT_ROOT"
+```
+
+The root defaults to the current directory when omitted. Discovery scans
+recursively without following directory symlinks and prints one experiment per
+line in deterministic path order. Each line includes its state, attempt, name,
+source identifier, and experiment path. A summary reports counts for
+`created`, `init`, `inprogress`, `completed`, `failed`, and invalid candidates.
+
+This command is read-only. It does not execute experiments or modify their
+status. Missing or malformed `config.json`/`status.json` pairs are reported
+individually, and the command returns status `2` when any are found.
+
 ## Where To Save Results
 
 Use a project-specific report root so experiment directories are easy to trace

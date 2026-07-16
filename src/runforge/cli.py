@@ -6,9 +6,11 @@ import argparse
 import shlex
 import sys
 import warnings
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from runforge.discovery import DiscoveryError, DiscoveryResult, discover_experiments
 from runforge.experiment_schema import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.git_ops import GitOperationError, GitRepository
 from runforge.json_store import load_json_object
@@ -16,6 +18,9 @@ from runforge.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan
 from runforge.retry import RetryError, prepare_retry
 from runforge.source_metadata import PinnedGitSource
 from runforge.worker import WorkerError, WorkerProgressEvent, run_experiment
+
+
+_DISCOVERY_STATES = ("created", "init", "inprogress", "completed", "failed")
 
 
 class _SemanticDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
@@ -33,6 +38,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     arguments = parser.parse_args(argv)
     try:
+        if arguments.subcommand == "discover":
+            _print_discover_arguments(arguments)
+            return _discover(arguments)
         if arguments.subcommand == "matrix":
             request = _matrix_request(arguments)
             _print_planning_arguments(
@@ -53,13 +61,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             _print_planning_arguments(arguments, request)
             experiment = _plan_with_warnings(request)
             print(f"Experiment plan created at: {experiment}", flush=True)
+            exit_code = 0
             if arguments.subcommand == "launch":
-                return run_experiment(
+                exit_code = run_experiment(
                     experiment,
                     stream_output=arguments.stream_output,
                     progress=_print_worker_progress,
                 )
-            return 0
+            return exit_code
         if arguments.subcommand == "retry":
             _print_retry_arguments(arguments)
             preparation = prepare_retry(arguments.experiment, force=arguments.force)
@@ -81,7 +90,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             stream_output=arguments.stream_output,
             progress=_print_worker_progress,
         )
-    except (PlanningError, RetryError, WorkerError, ValueError) as error:
+    except (DiscoveryError, PlanningError, RetryError, WorkerError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
@@ -151,6 +160,20 @@ def _parser() -> argparse.ArgumentParser:
         help="retry an inprogress experiment after independently confirming its worker stopped (default: disabled)",
     )
     retry.add_argument("experiment", type=Path, help="failed or interrupted experiment directory to retry")
+
+    discover = subparsers.add_parser(
+        "discover",
+        help="list planned experiments recursively",
+        description="Recursively inspect planned experiments without executing them.",
+        formatter_class=_SemanticDefaultsHelpFormatter,
+    )
+    discover.add_argument(
+        "root",
+        type=Path,
+        nargs="?",
+        default=Path("."),
+        help="directory to scan recursively (default: current directory)",
+    )
     return parser
 
 
@@ -206,6 +229,35 @@ def _add_stream_output_argument(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="stream stdout and stderr while preserving log files (default: disabled)",
     )
+
+
+def _discover(arguments: argparse.Namespace) -> int:
+    result = discover_experiments(arguments.root)
+    _print_discovery(result)
+    return 2 if result.diagnostics else 0
+
+
+def _print_discovery(result: DiscoveryResult) -> None:
+    print(f"Experiments discovered under: {result.root}")
+    if result.experiments:
+        for experiment in result.experiments:
+            source = experiment.configuration.source
+            print(
+                f"{experiment.status.state} | attempt={experiment.status.attempt} "
+                f"| name={experiment.configuration.name} | source={source.branch}@{source.commit[:8]} "
+                f"| path={experiment.path}"
+            )
+    else:
+        print("No experiments found.")
+
+    for diagnostic in result.diagnostics:
+        print(f"invalid | path={diagnostic.path} | error={diagnostic.message}", file=sys.stderr)
+
+    counts = Counter(experiment.status.state for experiment in result.experiments)
+    print("Summary:")
+    for state in _DISCOVERY_STATES:
+        print(f"  {state}: {counts[state]}")
+    print(f"  invalid: {len(result.diagnostics)}")
 
 
 def _plan_with_warnings(request: PlanRequest) -> Path:
@@ -337,6 +389,13 @@ def _print_retry_arguments(arguments: argparse.Namespace) -> None:
             ("next attempt", next_attempt),
             *_execution_summary_rows(experiment),
         ],
+    )
+
+
+def _print_discover_arguments(arguments: argparse.Namespace) -> None:
+    _print_effective_arguments(
+        "discover",
+        [("root", _path_text(arguments.root))],
     )
 
 
