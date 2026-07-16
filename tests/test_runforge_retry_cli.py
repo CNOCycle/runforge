@@ -101,7 +101,7 @@ def test_retry_archives_failed_attempt_prints_effective_arguments_and_executes(t
 
     captured = capsys.readouterr()
     output = captured.out
-    archive = experiment / "attempts" / "attempt-0001"
+    archive = experiment / "attempt-0001"
     assert captured.err == ""
     assert "RunForge retry effective arguments:" in output
     assert f"  experiment: {experiment}" in output
@@ -147,12 +147,12 @@ def test_retry_requires_force_for_inprogress_and_warns_before_execution(tmp_path
     assert "  force: disabled" in captured.out
     assert "force=True is required" in captured.err
     assert _status(experiment) == active
-    assert not (experiment / "attempts").exists()
+    assert not tuple(experiment.glob("attempt-*"))
 
     assert main(["retry", "--force", "--stream-output", str(experiment)]) == 0
 
     captured = capsys.readouterr()
-    archive = experiment / "attempts" / "attempt-0002"
+    archive = experiment / "attempt-0002"
     assert "  force: enabled" in captured.out
     assert "  current state: inprogress" in captured.out
     assert "  current attempt: 2" in captured.out
@@ -182,4 +182,4 @@ def test_retry_rejects_completed_experiment_without_archiving(tmp_path, capsys):
     assert "  current state: completed" in captured.out
     assert "Completed experiments cannot be retried" in captured.err
     assert _status(experiment) == completed
-    assert not (experiment / "attempts").exists()
+    assert not tuple(experiment.glob("attempt-*"))

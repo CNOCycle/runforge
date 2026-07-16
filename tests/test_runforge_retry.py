@@ -91,7 +91,7 @@ def test_prepare_retry_archives_failed_attempt_and_preserves_attempt_counter(tmp
 
     preparation = prepare_retry(experiment)
 
-    archive = experiment / "attempts" / "attempt-0001"
+    archive = experiment / "attempt-0001"
     prepared = _status(experiment)
     archived = ExperimentStatus.from_dict(load_json_object(archive / "status.snapshot.json"))
     assert preparation.experiment == experiment
@@ -137,7 +137,7 @@ def test_prepare_retry_requires_force_for_inprogress_experiment(tmp_path):
         prepare_retry(experiment)
 
     assert _status(experiment) == active
-    assert not (experiment / "attempts").exists()
+    assert not tuple(experiment.glob("attempt-*"))
     assert (experiment / "stdout.log").read_text(encoding="utf-8") == "partial output\n"
 
     preparation = prepare_retry(experiment, force=True)
@@ -180,15 +180,15 @@ def test_prepare_retry_rejects_ineligible_states_without_changes(tmp_path, state
 
     assert _status(experiment) == original
     assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "keep"
-    assert not (experiment / "attempts").exists()
+    assert not tuple(experiment.glob("attempt-*"))
 
 
 def test_prepare_retry_rejects_existing_attempt_archive_without_changes(tmp_path):
     experiment = _experiment(tmp_path)
     failed = _failed_status(experiment)
     (experiment / "stdout.log").write_text("keep\n", encoding="utf-8")
-    archive = experiment / "attempts" / "attempt-0001"
-    archive.mkdir(parents=True)
+    archive = experiment / "attempt-0001"
+    archive.mkdir()
     (archive / "marker.txt").write_text("existing", encoding="utf-8")
 
     with pytest.raises(RetryError, match="archive already exists"):
@@ -221,5 +221,4 @@ def test_prepare_retry_rolls_back_outputs_when_status_reset_fails(tmp_path, monk
     assert (experiment / "stdout.log").read_text(encoding="utf-8") == "out\n"
     assert (experiment / "stderr.log").read_text(encoding="utf-8") == "err\n"
     assert (experiment / "artifacts" / "partial.txt").read_text(encoding="utf-8") == "partial"
-    history = experiment / "attempts"
-    assert not history.exists() or list(history.iterdir()) == []
+    assert not tuple(experiment.glob("attempt-*"))

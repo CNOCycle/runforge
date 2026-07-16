@@ -12,7 +12,6 @@ from runforge.json_store import load_json_object, save_json_object
 from runforge.time_utils import utc_now
 
 
-_ATTEMPT_HISTORY_DIRECTORY = "attempts"
 _STATUS_SNAPSHOT_FILE = "status.snapshot.json"
 _ARCHIVED_OUTPUTS = ("stdout.log", "stderr.log", "artifacts")
 
@@ -57,7 +56,7 @@ def prepare_retry(experiment_path: Path, *, force: bool = False) -> RetryPrepara
         raise RetryError(str(error)) from error
 
     forced = _validate_retry_state(previous_status, force=force)
-    archive = experiment / _ATTEMPT_HISTORY_DIRECTORY / f"attempt-{previous_status.attempt:04d}"
+    archive = experiment / f"attempt-{previous_status.attempt:04d}"
     prepared_status = replace(
         previous_status,
         state="init",

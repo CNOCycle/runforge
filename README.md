@@ -147,7 +147,7 @@ retried; create a new plan for another intentional successful run. Experiments
 in `created` or `init` remain runnable with `run`.
 
 Before execution, retry archives the previous `status.json`, logs, and artifacts
-under `attempts/attempt-NNNN/`, creates an empty `artifacts/` directory, and
+under `attempt-NNNN/`, creates an empty `artifacts/` directory, and
 resets the status for the normal worker. The worker increments `attempt` when
 the new command starts.
 
@@ -272,7 +272,7 @@ REPORT_ROOT/
       stdout.log
       stderr.log
       artifacts/
-      attempts/        # prior retry status snapshots, logs, and artifacts
+      attempt-NNNN/    # prior retry status snapshot, logs, and artifacts
 ```
 
 The lifecycle is `created -> init -> inprogress -> completed|failed`.
