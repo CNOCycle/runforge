@@ -18,6 +18,24 @@ parameters, environment overrides, initial status, and reproduction helpers. A
 **worker** reconstructs one explicit plan, runs it, and updates status, logs, and
 artifacts.
 
+## Project Structure
+
+The Python package is grouped by responsibility:
+
+```text
+src/runforge/
+  cli/             # argparse tree, request translation, output, and dispatch
+  schemas/         # versioned experiment and source data contracts
+  planning/        # source resolution, matrices, and plan publication
+  execution/       # discovery, retry, and worker execution
+  infrastructure/  # experiment storage, Git, atomic JSON, and clock access
+```
+
+The test tree mirrors these packages. Standard experiment filenames and typed
+configuration/status persistence are centralized in `ExperimentDirectory`, so
+planning, execution, discovery, retry, and CLI summaries share one on-disk
+storage definition.
+
 ## Install
 
 From this project root:
