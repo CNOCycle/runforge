@@ -6,8 +6,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from runforge.infrastructure.experiment import CONFIGURATION_FILE, STATUS_FILE, ExperimentDirectory
-from runforge.models.experiment import ExperimentConfiguration, ExperimentStatus
+from runforge.infrastructure.storage import CONFIGURATION_FILE, STATUS_FILE, ExperimentDirectory
+from runforge.schemas.experiment import ExperimentConfiguration, ExperimentStatus
 
 
 class DiscoveryError(RuntimeError):

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from runforge.infrastructure.json_store import load_json_object, save_json_object
-from runforge.models.source import GitSource
+from runforge.schemas.source import GitSource
 
 
 def test_git_source_metadata_round_trips_through_the_generic_json_store(tmp_path):

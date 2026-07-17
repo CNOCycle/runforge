@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from runforge.infrastructure.experiment import ExperimentDirectory
-from runforge.models.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
-from runforge.models.source import GitSource
+from runforge.infrastructure.storage import ExperimentDirectory
+from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
+from runforge.schemas.source import GitSource
 
 
 def test_experiment_directory_centralizes_paths_and_metadata_round_trip(tmp_path):

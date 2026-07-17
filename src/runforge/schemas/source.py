@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from runforge.models.validation import require_exact_fields, require_object, require_text
+from runforge.schemas.validation import require_exact_fields, require_object, require_text
 
 
 SOURCE_SCHEMA_VERSION = 1

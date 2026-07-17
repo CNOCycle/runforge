@@ -7,8 +7,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from runforge.models.source import GitSource
-from runforge.models.validation import require_exact_fields, require_object, require_string_mapping, require_text
+from runforge.schemas.source import GitSource
+from runforge.schemas.validation import require_exact_fields, require_object, require_string_mapping, require_text
 
 
 _PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")

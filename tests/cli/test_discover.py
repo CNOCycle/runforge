@@ -6,9 +6,9 @@ from pathlib import Path
 
 from runforge.cli import main
 from runforge.infrastructure.json_store import load_json_object, save_json_object
-from runforge.models.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
-from runforge.models.source import GitSource
 from runforge.planning.planner import PlanRequest, plan_experiment
+from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
+from runforge.schemas.source import GitSource
 from tests.support import create_git_repository
 
 

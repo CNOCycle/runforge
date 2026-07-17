@@ -13,9 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from runforge.infrastructure.clock import utc_now
-from runforge.infrastructure.experiment import ExperimentDirectory
-from runforge.models.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
-from runforge.models.source import PinnedGitSource
+from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.planning.matrix import MatrixError, expand_matrix
 from runforge.planning.source import (
     ResolvedGitSource,
@@ -23,6 +21,8 @@ from runforge.planning.source import (
     resolve_current_git_source,
     resolve_pinned_git_source,
 )
+from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
+from runforge.schemas.source import PinnedGitSource
 
 
 _SLUG_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")

@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import BinaryIO, Literal, TextIO
 
 from runforge.infrastructure.clock import utc_now
-from runforge.infrastructure.experiment import ExperimentDirectory
 from runforge.infrastructure.git import GitOperationError, GitRepository
-from runforge.models.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
+from runforge.infrastructure.storage import ExperimentDirectory
+from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 
 
 class WorkerError(RuntimeError):

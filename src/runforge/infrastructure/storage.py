@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from runforge.infrastructure.json_store import load_json_object, save_json_object
-from runforge.models.experiment import ExperimentConfiguration, ExperimentStatus
-from runforge.models.source import GIT_PATCH_FILE
+from runforge.schemas.experiment import ExperimentConfiguration, ExperimentStatus
+from runforge.schemas.source import GIT_PATCH_FILE
 
 
 CONFIGURATION_FILE = "config.json"

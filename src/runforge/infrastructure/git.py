@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from runforge.models.source import GIT_PATCH_FILE
+from runforge.schemas.source import GIT_PATCH_FILE
 
 
 class GitOperationError(RuntimeError):

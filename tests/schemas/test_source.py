@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from runforge.models.source import GitSource, PinnedGitSource, SourceMetadataError
+from runforge.schemas.source import GitSource, PinnedGitSource, SourceMetadataError
 
 
 def test_git_source_round_trip_preserves_commit_branch_patch_and_untracked_files(tmp_path):

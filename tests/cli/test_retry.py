@@ -6,7 +6,7 @@ from pathlib import Path
 
 from runforge.cli import main
 from runforge.infrastructure.json_store import load_json_object, save_json_object
-from runforge.models.experiment import ExperimentStatus
+from runforge.schemas.experiment import ExperimentStatus
 from tests.support import create_git_repository, planned_path
 
 

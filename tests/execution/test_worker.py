@@ -8,9 +8,9 @@ import pytest
 
 from runforge.execution.worker import WorkerError, WorkerProgressEvent, run_experiment
 from runforge.infrastructure.json_store import load_json_object
-from runforge.models.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
-from runforge.models.source import PinnedGitSource
 from runforge.planning.planner import PlanRequest, plan_experiment
+from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
+from runforge.schemas.source import PinnedGitSource
 from tests.support import create_git_repository, git
 
 

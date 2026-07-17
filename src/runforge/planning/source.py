@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from runforge.infrastructure.git import GitOperationError, GitRepository
-from runforge.models.source import GIT_PATCH_FILE, GitSource, PinnedGitSource
+from runforge.schemas.source import GIT_PATCH_FILE, GitSource, PinnedGitSource
 
 
 class SourceResolutionError(RuntimeError):

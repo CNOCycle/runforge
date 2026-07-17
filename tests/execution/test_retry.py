@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-import runforge.infrastructure.experiment as experiment_storage
+import runforge.infrastructure.storage as experiment_storage
 from runforge.execution.retry import RetryError, prepare_retry
 from runforge.execution.worker import run_experiment
 from runforge.infrastructure.json_store import load_json_object, save_json_object
-from runforge.models.experiment import ExperimentCommand, ExperimentStatus
 from runforge.planning.planner import PlanRequest, plan_experiment
+from runforge.schemas.experiment import ExperimentCommand, ExperimentStatus
 from tests.support import create_git_repository
 
 

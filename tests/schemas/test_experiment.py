@@ -6,13 +6,13 @@ from dataclasses import replace
 
 import pytest
 
-from runforge.models.experiment import (
+from runforge.schemas.experiment import (
     ExperimentCommand,
     ExperimentConfiguration,
     ExperimentSchemaError,
     ExperimentStatus,
 )
-from runforge.models.source import GitSource
+from runforge.schemas.source import GitSource
 
 
 CONFIGURATION_SCHEMA_VERSION = 2

@@ -14,7 +14,6 @@ from runforge.execution import (
     run_experiment,
 )
 from runforge.infrastructure import GitHead, GitOperationError, GitRepository
-from runforge.models import ExperimentCommand, PinnedGitSource
 from runforge.planning import (
     MatrixPlanRequest,
     PlanningError,
@@ -22,6 +21,7 @@ from runforge.planning import (
     plan_experiment,
     plan_matrix,
 )
+from runforge.schemas import ExperimentCommand, PinnedGitSource
 
 
 __all__ = [

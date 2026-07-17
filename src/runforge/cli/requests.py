@@ -6,9 +6,9 @@ import argparse
 from pathlib import Path
 
 from runforge.infrastructure.json_store import load_json_object
-from runforge.models.experiment import ExperimentCommand
-from runforge.models.source import PinnedGitSource
 from runforge.planning.planner import MatrixPlanRequest, PlanningError, PlanRequest
+from runforge.schemas.experiment import ExperimentCommand
+from runforge.schemas.source import PinnedGitSource
 
 
 def matrix_request(arguments: argparse.Namespace) -> MatrixPlanRequest:

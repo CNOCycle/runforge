@@ -1,13 +1,13 @@
-"""Versioned RunForge data models."""
+"""Versioned RunForge data contracts and validation."""
 
-from runforge.models.experiment import (
+from runforge.schemas.experiment import (
     EXPERIMENT_SCHEMA_VERSION,
     ExperimentCommand,
     ExperimentConfiguration,
     ExperimentSchemaError,
     ExperimentStatus,
 )
-from runforge.models.source import (
+from runforge.schemas.source import (
     GIT_PATCH_FILE,
     SOURCE_SCHEMA_VERSION,
     GitSource,

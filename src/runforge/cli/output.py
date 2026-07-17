@@ -11,10 +11,10 @@ from pathlib import Path
 
 from runforge.execution.discovery import DiscoveryResult
 from runforge.execution.worker import WorkerProgressEvent
-from runforge.infrastructure.experiment import ExperimentDirectory
 from runforge.infrastructure.git import GitOperationError, GitRepository
-from runforge.models.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
+from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.planning.planner import PlanRequest
+from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 
 
 _DISCOVERY_STATES = ("created", "init", "inprogress", "completed", "failed")

@@ -8,14 +8,14 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from runforge.infrastructure.clock import utc_now
-from runforge.infrastructure.experiment import (
+from runforge.infrastructure.json_store import save_json_object
+from runforge.infrastructure.storage import (
     ARTIFACTS_DIRECTORY,
     STDERR_LOG_FILE,
     STDOUT_LOG_FILE,
     ExperimentDirectory,
 )
-from runforge.infrastructure.json_store import save_json_object
-from runforge.models.experiment import ExperimentStatus
+from runforge.schemas.experiment import ExperimentStatus
 
 
 _STATUS_SNAPSHOT_FILE = "status.snapshot.json"
