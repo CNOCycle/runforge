@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from runforge.version import display_version
+
 
 class SemanticDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
     """Show literal defaults automatically while preserving semantic descriptions."""
@@ -24,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="Use 'runforge SUBCOMMAND --help' for detailed subcommand options.",
         formatter_class=SemanticDefaultsHelpFormatter,
     )
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {display_version()}")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     plan = subparsers.add_parser(

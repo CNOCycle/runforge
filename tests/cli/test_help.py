@@ -25,6 +25,15 @@ def test_top_level_help_lists_every_command_and_subcommand_guidance(capsys):
     for subcommand in ("plan", "launch", "matrix", "run", "retry", "discover"):
         assert subcommand in output
     assert "runforge SUBCOMMAND --help" in output
+    assert "-v, --version" in output
+
+
+def test_version_flags_print_one_line_without_a_subcommand(capsys):
+    for flag in ("--version", "-v"):
+        with pytest.raises(SystemExit) as raised:
+            main([flag])
+        assert raised.value.code == 0
+        assert capsys.readouterr().out.startswith("runforge 0.1.0+")
 
 
 def test_plan_help_states_every_semantic_default(capsys):
