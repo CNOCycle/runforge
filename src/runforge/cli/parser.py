@@ -80,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_stream_output_argument(retry)
     retry.add_argument(
+        "-f",
         "--force",
         action="store_true",
         help="retry an inprogress experiment after independently confirming its worker stopped (default: disabled)",
@@ -166,6 +167,7 @@ def _add_planning_arguments(parser: argparse.ArgumentParser, *, pinned_only: boo
 
 def _add_stream_output_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
+        "-s",
         "--stream-output",
         action="store_true",
         help="stream stdout and stderr while preserving log files (default: disabled)",
