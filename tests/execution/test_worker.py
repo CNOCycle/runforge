@@ -8,6 +8,7 @@ import pytest
 
 from runforge.execution.worker import WorkerError, WorkerProgressEvent, run_experiment
 from runforge.infrastructure.json_store import load_json_object
+from runforge.planning.inputs import InputTemplate
 from runforge.planning.planner import PlanRequest, plan_experiment
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.schemas.source import PinnedGitSource
@@ -84,6 +85,60 @@ def test_worker_executes_pinned_commit_after_current_checkout_advances(tmp_path)
     assert configuration.source.branch == "pinned"
     assert run_experiment(experiment) == 0
     assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "first"
+
+
+def test_worker_verifies_inputs_and_exposes_the_input_directory(tmp_path):
+    repository = _repository(
+        tmp_path,
+        (
+            "import os\n"
+            "from pathlib import Path\n"
+            "input_path = Path(os.environ['RUNFORGE_INPUT_DIR']) / 'config.json'\n"
+            "Path(os.environ['RUNFORGE_ARTIFACT_DIR']).joinpath('result.txt').write_text(input_path.read_text())\n"
+        ),
+    )
+    experiment = plan_experiment(
+        PlanRequest(
+            name="inputs",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=tmp_path / "reports",
+            inputs=(InputTemplate(path="config.json", kind="copy", content="configured\n"),),
+        )
+    )
+
+    assert run_experiment(experiment) == 0
+
+    assert (experiment / "artifacts/result.txt").read_text(encoding="utf-8") == "configured\n"
+
+
+@pytest.mark.parametrize(
+    "mutation, match",
+    [
+        (lambda inputs: (inputs / "config.json").write_text("changed\\n", encoding="utf-8"), "checksum"),
+        (lambda inputs: (inputs / "extra.txt").write_text("unexpected\\n", encoding="utf-8"), "Unexpected"),
+        (lambda inputs: (inputs / "config.json").unlink(), "missing"),
+    ],
+)
+def test_worker_rejects_mutated_planned_inputs_before_execution(tmp_path, mutation, match):
+    repository = _repository(tmp_path, "raise SystemExit('must not execute')\n")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="invalid inputs",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=tmp_path / "reports",
+            inputs=(InputTemplate(path="config.json", kind="copy", content="configured\n"),),
+        )
+    )
+    mutation(experiment / "inputs")
+
+    with pytest.raises(WorkerError, match=match):
+        run_experiment(experiment)
+
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    assert status.state == "failed"
+    assert status.attempt == 0
 
 
 def test_worker_records_nonzero_command_exit(tmp_path):
