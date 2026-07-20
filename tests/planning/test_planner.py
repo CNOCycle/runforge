@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
 
 import runforge.planning.planner as planner_module
 from runforge.infrastructure.json_store import load_json_object
+from runforge.infrastructure.storage import ExperimentDirectory
+from runforge.planning.inputs import InputTemplate
 from runforge.planning.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.schemas.source import PinnedGitSource
@@ -70,6 +73,46 @@ def test_planner_defaults_output_root_to_source_repository_reports(tmp_path):
     )
 
     assert experiment.parent.parent == repository.resolve() / "reports"
+
+
+def test_planner_publishes_rendered_linked_input_tree_and_manifest(tmp_path):
+    repository = _repository(tmp_path)
+    request = PlanRequest(
+        name="linked inputs",
+        command=ExperimentCommand.argv(
+            ("python", "train.py", "{INPUT_DIR}/configs/train.json", "--artifact-dir={ARTIFACT_DIR}")
+        ),
+        source_path=repository,
+        output_root=tmp_path / "reports",
+        inputs=(
+            InputTemplate(
+                path="configs/eval.json",
+                kind="json-template",
+                content='{"checkpoint": "{ARTIFACT_DIR}/training/checkpoint.pt"}',
+            ),
+            InputTemplate(
+                path="configs/train.json",
+                kind="json-template",
+                content='{"output": "{ARTIFACT_DIR}/training"}',
+            ),
+            InputTemplate(path="components/data.json", kind="copy", content='{"version": 1}\\n'),
+        ),
+    )
+
+    experiment = plan_experiment(request)
+    layout = ExperimentDirectory(experiment)
+    manifest = layout.load_input_manifest()
+
+    assert manifest.entries[0].path == "components/data.json"
+    assert json.loads(layout.input_file("configs/train.json").read_text(encoding="utf-8")) == {
+        "output": f"{experiment}/artifacts/training",
+    }
+    assert json.loads(layout.input_file("configs/eval.json").read_text(encoding="utf-8")) == {
+        "checkpoint": f"{experiment}/artifacts/training/checkpoint.pt"
+    }
+    configuration = ExperimentConfiguration.from_dict(load_json_object(layout.configuration_file))
+    assert configuration.command.arguments[2] == f"{experiment}/inputs/configs/train.json"
+    assert configuration.command.arguments[3] == f"--artifact-dir={experiment}/artifacts"
 
 
 def test_planner_allocates_distinct_experiment_directories_and_persists_shell_pipeline(tmp_path):
@@ -137,10 +180,17 @@ def test_matrix_planner_resolves_source_once_and_publishes_deterministic_combina
         command=ExperimentCommand.argv(("python", "train.py", "--lr={LR}", "--seed={SEED}", "--out={ARTIFACT_DIR}")),
         output_root=tmp_path / "reports",
         source=PinnedGitSource(repository=repository, commit=pinned_commit),
+        inputs=(
+            InputTemplate(
+                path="configs/train.json",
+                kind="json-template",
+                content='{"lr": "{LR}", "seed": "{SEED}", "amp": "{AMP}"}',
+            ),
+        ),
     )
     request = MatrixPlanRequest(
         template=template,
-        parameters={"SEED": [2, 1], "LR": [0.1, 0.01]},
+        parameters={"SEED": [2, 1], "LR": [0.1, 0.01], "AMP": [True]},
     )
     calls = 0
     original_resolver = planner_module.resolve_pinned_git_source
@@ -156,10 +206,10 @@ def test_matrix_planner_resolves_source_once_and_publishes_deterministic_combina
         ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json")) for experiment in experiments
     )
     expected = (
-        {"LR": "0.1", "SEED": "2"},
-        {"LR": "0.1", "SEED": "1"},
-        {"LR": "0.01", "SEED": "2"},
-        {"LR": "0.01", "SEED": "1"},
+        {"AMP": True, "LR": 0.1, "SEED": 2},
+        {"AMP": True, "LR": 0.1, "SEED": 1},
+        {"AMP": True, "LR": 0.01, "SEED": 2},
+        {"AMP": True, "LR": 0.01, "SEED": 1},
     )
 
     assert calls == 1
@@ -170,6 +220,11 @@ def test_matrix_planner_resolves_source_once_and_publishes_deterministic_combina
         assert configuration.command.arguments[-3] == f"--lr={parameters['LR']}"
         assert configuration.command.arguments[-2] == f"--seed={parameters['SEED']}"
         assert configuration.command.arguments[-1] == f"--out={experiment / 'artifacts'}"
+        assert json.loads((experiment / "inputs/configs/train.json").read_text(encoding="utf-8")) == {
+            "amp": True,
+            "lr": parameters["LR"],
+            "seed": parameters["SEED"],
+        }
 
 
 def test_matrix_planner_rejects_invalid_axis_before_creating_output(tmp_path):

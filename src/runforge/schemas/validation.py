@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -42,4 +43,24 @@ def require_string_mapping(value: Any, context: str, error_type: type[ValueError
     result = dict(value)
     if not all(isinstance(key, str) and key and isinstance(item, str) for key, item in result.items()):
         raise error_type(f"{context} must map non-empty strings to strings")
+    return result
+
+
+def require_json_scalar_mapping(
+    value: Any,
+    context: str,
+    error_type: type[ValueError],
+) -> dict[str, str | int | float | bool]:
+    """Return a copied mapping of names to finite JSON scalar values."""
+    if not isinstance(value, Mapping):
+        raise error_type(f"{context} must map non-empty strings to JSON scalar values")
+    result = dict(value)
+    for key, item in result.items():
+        if not isinstance(key, str) or not key:
+            raise error_type(f"{context} must map non-empty strings to JSON scalar values")
+        if isinstance(item, bool) or isinstance(item, (str, int)):
+            continue
+        if isinstance(item, float) and math.isfinite(item):
+            continue
+        raise error_type(f"{context} must map non-empty strings to JSON scalar values")
     return result

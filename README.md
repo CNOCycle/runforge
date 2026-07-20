@@ -307,6 +307,29 @@ runforge plan \
 rendered command; it does not substitute placeholders. The worker also provides
 `RUNFORGE_ARTIFACT_DIR` to the child process.
 
+## Planned Configuration Inputs
+
+Some programs receive output paths and downstream checkpoint locations through
+configuration files rather than command arguments. Use `--input-tree` to
+capture a configuration directory as immutable per-experiment inputs. JSON
+files render structurally; YAML, YML, and INI files render as text while
+preserving their layout and comments, then receive syntax validation. All
+templated formats support
+`{ARTIFACT_DIR}`, `{INPUT_DIR}`, and matrix parameters.
+
+```bash
+runforge launch \
+  --name train-evaluate \
+  --source-path "$REPO" \
+  --input-tree "$REPO/configs" \
+  --shell -- \
+  "python train.py '{INPUT_DIR}/train.json' && python evaluate.py '{INPUT_DIR}/eval.json'"
+```
+
+The detailed
+[planned configuration inputs guide](docs/guides/planned-configuration-inputs.md)
+shows how linked training and evaluation files share one artifact layout.
+
 ## Advanced: Environment Overrides
 
 Most runs can skip this. Use an environment file when the experiment needs

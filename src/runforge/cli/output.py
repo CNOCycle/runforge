@@ -60,6 +60,8 @@ def print_planning_arguments(
         ("patch", _optional_path_text(request.source.patch if request.source is not None else None)),
         ("environment file", _optional_path_text(arguments.env_file)),
         ("environment keys", _keys_text(request.environment)),
+        ("input tree", _optional_path_text(arguments.input_tree)),
+        ("planned inputs", str(len(request.inputs))),
         ("command mode", request.command.mode),
         ("shell mode", boolean_text(request.command.mode == "shell")),
         ("command", command_text(request.command)),

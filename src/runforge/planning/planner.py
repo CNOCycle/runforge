@@ -14,7 +14,8 @@ from pathlib import Path
 
 from runforge.infrastructure.clock import utc_now
 from runforge.infrastructure.storage import ExperimentDirectory
-from runforge.planning.matrix import MatrixError, expand_matrix
+from runforge.planning.inputs import InputRenderingError, InputTemplate, RenderedInput, render_input_templates
+from runforge.planning.matrix import JsonScalar, MatrixError, expand_matrix, parameter_text
 from runforge.planning.source import (
     ResolvedGitSource,
     SourceResolutionError,
@@ -22,6 +23,7 @@ from runforge.planning.source import (
     resolve_pinned_git_source,
 )
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
+from runforge.schemas.inputs import PlannedInput, PlannedInputManifest
 from runforge.schemas.source import PinnedGitSource
 
 
@@ -44,6 +46,7 @@ class PlanRequest:
     source_path: Path = Path(".")
     source: PinnedGitSource | None = None
     environment: Mapping[str, str] = field(default_factory=dict)
+    inputs: Sequence[InputTemplate] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -60,6 +63,12 @@ class PlanRequest:
         if not all(isinstance(key, str) and key and isinstance(value, str) for key, value in environment.items()):
             raise PlanningError("environment must map non-empty strings to strings")
         object.__setattr__(self, "environment", environment)
+        if isinstance(self.inputs, (str, bytes)) or not isinstance(self.inputs, Sequence):
+            raise PlanningError("inputs must be an array of InputTemplate metadata")
+        inputs = tuple(self.inputs)
+        if not all(isinstance(entry, InputTemplate) for entry in inputs):
+            raise PlanningError("inputs must be an array of InputTemplate metadata")
+        object.__setattr__(self, "inputs", inputs)
 
 
 @dataclass(frozen=True)
@@ -68,7 +77,7 @@ class MatrixPlanRequest:
 
     template: PlanRequest
     parameters: Mapping[str, Sequence[object]]
-    combinations: tuple[dict[str, str], ...] = field(init=False, repr=False)
+    combinations: tuple[dict[str, JsonScalar], ...] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.template, PlanRequest):
@@ -88,6 +97,7 @@ class _PreparedExperiment:
     destination: Path
     configuration: ExperimentConfiguration
     status: ExperimentStatus
+    inputs: tuple[RenderedInput, ...]
 
 
 def plan_experiment(request: PlanRequest) -> Path:
@@ -117,7 +127,7 @@ def _plan_resolved_experiment(request: PlanRequest, resolved: ResolvedGitSource)
     output_root = request.output_root or resolved.repository.root / _DEFAULT_OUTPUT_ROOT
     destination = _destination(output_root, source.branch, source.commit, request.name)
     prepared = _prepare_experiment(request, resolved, destination, {}, utc_now())
-    _publish(prepared.destination, prepared.configuration, prepared.status, resolved.patch)
+    _publish(prepared.destination, prepared.configuration, prepared.status, resolved.patch, prepared.inputs)
     _warn_untracked(source.untracked_files)
     return destination
 
@@ -137,7 +147,9 @@ def _plan_resolved_matrix(request: MatrixPlanRequest, resolved: ResolvedGitSourc
     created: list[Path] = []
     try:
         for experiment in prepared:
-            _publish(experiment.destination, experiment.configuration, experiment.status, resolved.patch)
+            _publish(
+                experiment.destination, experiment.configuration, experiment.status, resolved.patch, experiment.inputs
+            )
             created.append(experiment.destination)
     except Exception:
         for destination in created:
@@ -150,13 +162,22 @@ def _prepare_experiment(
     request: PlanRequest,
     resolved: ResolvedGitSource,
     destination: Path,
-    parameters: Mapping[str, str],
+    parameters: Mapping[str, JsonScalar],
     timestamp: str,
 ) -> _PreparedExperiment:
     """Build and validate immutable plan data without publishing files."""
-    placeholders = dict(parameters)
-    placeholders["ARTIFACT_DIR"] = str(ExperimentDirectory(destination).artifacts)
-    rendered_command = request.command.render_placeholders(placeholders)
+    layout = ExperimentDirectory(destination)
+    input_placeholders: dict[str, object] = dict(parameters)
+    input_placeholders["ARTIFACT_DIR"] = str(layout.artifacts)
+    input_placeholders["INPUT_DIR"] = str(layout.inputs)
+    command_placeholders = {key: parameter_text(value) for key, value in parameters.items()}
+    command_placeholders["ARTIFACT_DIR"] = str(layout.artifacts)
+    command_placeholders["INPUT_DIR"] = str(layout.inputs)
+    try:
+        rendered_command = request.command.render_placeholders(command_placeholders)
+        rendered_inputs = render_input_templates(request.inputs, input_placeholders) if request.inputs else ()
+    except InputRenderingError as error:
+        raise PlanningError(str(error)) from error
     configuration = ExperimentConfiguration(
         experiment_id=destination.name,
         name=request.name,
@@ -167,7 +188,7 @@ def _prepare_experiment(
         parameters=parameters,
     )
     status = ExperimentStatus(state="created", attempt=0, updated_at=timestamp)
-    return _PreparedExperiment(destination, configuration, status)
+    return _PreparedExperiment(destination, configuration, status, rendered_inputs)
 
 
 def _destination(
@@ -202,6 +223,7 @@ def _publish(
     configuration: ExperimentConfiguration,
     status: ExperimentStatus,
     patch: bytes,
+    inputs: Sequence[RenderedInput],
 ) -> None:
     temporary = destination.parent / f".{destination.name}.tmp-{uuid.uuid4().hex}"
     temporary.mkdir()
@@ -210,6 +232,8 @@ def _publish(
         layout.save_configuration(configuration)
         layout.save_status(status)
         layout.artifacts.mkdir()
+        if inputs:
+            _publish_inputs(layout, inputs)
         _write_command_file(layout.command_file, configuration.command)
         if patch:
             layout.git_patch_file.write_bytes(patch)
@@ -217,6 +241,18 @@ def _publish(
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
+
+
+def _publish_inputs(layout: ExperimentDirectory, inputs: Sequence[RenderedInput]) -> None:
+    """Write an already-rendered immutable input tree into an unpublished plan."""
+    layout.inputs.mkdir()
+    entries: list[PlannedInput] = []
+    for rendered in inputs:
+        destination = layout.input_file(rendered.path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(rendered.content)
+        entries.append(PlannedInput(path=rendered.path, kind=rendered.kind, sha256=rendered.sha256))
+    layout.save_input_manifest(PlannedInputManifest(entries=tuple(entries)))
 
 
 def _write_command_file(path: Path, command: ExperimentCommand) -> None:

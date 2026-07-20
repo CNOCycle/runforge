@@ -17,10 +17,10 @@ def test_matrix_expansion_sorts_keys_and_preserves_axis_value_order():
     )
 
     assert combinations == (
-        {"AMP": "true", "LR": "0.1", "SEED": "2"},
-        {"AMP": "true", "LR": "0.1", "SEED": "1"},
-        {"AMP": "true", "LR": "0.01", "SEED": "2"},
-        {"AMP": "true", "LR": "0.01", "SEED": "1"},
+        {"AMP": True, "LR": 0.1, "SEED": 2},
+        {"AMP": True, "LR": 0.1, "SEED": 1},
+        {"AMP": True, "LR": 0.01, "SEED": 2},
+        {"AMP": True, "LR": 0.01, "SEED": 1},
     )
 
 
@@ -29,6 +29,7 @@ def test_matrix_expansion_sorts_keys_and_preserves_axis_value_order():
     [
         {},
         {"ARTIFACT_DIR": ["reserved"]},
+        {"INPUT_DIR": ["reserved"]},
         {"bad-name": ["value"]},
         {"LR": []},
         {"LR": "not-an-array"},

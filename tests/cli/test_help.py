@@ -40,6 +40,7 @@ def test_plan_help_states_every_semantic_default(capsys):
     assert "commit or ref for a pinned Git source (default: not set)" in output
     assert "optional patch for a pinned Git source (default: not set)" in output
     assert "environment override file (default: not set)" in output
+    assert "configuration tree captured as immutable inputs" in output
     assert "shell pipeline (default: disabled)" in output
 
 

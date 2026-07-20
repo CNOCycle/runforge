@@ -146,6 +146,14 @@ def _add_planning_arguments(parser: argparse.ArgumentParser, *, pinned_only: boo
         help="KEY=VALUE environment override file (default: not set)",
     )
     parser.add_argument(
+        "--input-tree",
+        type=Path,
+        help=(
+            "UTF-8 configuration tree captured as immutable inputs; JSON renders structurally and YAML/YML/INI "
+            "render with syntax validation (default: not set)"
+        ),
+    )
+    parser.add_argument(
         "--shell",
         action="store_true",
         help="interpret one command string as an explicit shell pipeline (default: disabled)",
