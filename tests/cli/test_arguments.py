@@ -30,10 +30,86 @@ def test_plan_summary_shows_resolved_defaults_quoted_command_and_redacted_enviro
     assert "  patch: not set" in output
     assert f"  environment file: {environment_file}" in output
     assert "  environment keys: API_TOKEN, RUN_MODE" in output
+    assert "  input tree: not set" in output
+    assert "  planned inputs: 0" in output
     assert "  command mode: argv" in output
     assert "  shell mode: disabled" in output
     assert "  command: python train.py 'two words'" in output
     assert "very-secret" not in output
+
+
+def test_plan_captures_a_json_input_tree_and_reports_its_effective_arguments(tmp_path, capsys):
+    repository = _repository(tmp_path)
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    (inputs / "train.json").write_text('{"output": "{ARTIFACT_DIR}/training"}\n', encoding="utf-8")
+    (inputs / "notes.txt").write_text("copied\n", encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "plan",
+                "--source-path",
+                str(repository),
+                "--out-dir",
+                str(tmp_path / "reports"),
+                "--input-tree",
+                str(inputs),
+                "--",
+                "python",
+                "train.py",
+                "{INPUT_DIR}/train.json",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    experiment = planned_path(output)
+    assert f"  input tree: {inputs}" in output
+    assert "  planned inputs: 2" in output
+    assert (experiment / "inputs/notes.txt").read_text(encoding="utf-8") == "copied\n"
+    assert (experiment / "inputs/train.json").read_text(encoding="utf-8") == (
+        '{\n  "output": "' + str(experiment / "artifacts/training") + '"\n}\n'
+    )
+
+
+def test_plan_renders_yaml_yml_and_ini_files_from_an_input_tree(tmp_path, capsys):
+    repository = _repository(tmp_path)
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    (inputs / "train.yaml").write_text("output: {ARTIFACT_DIR}/training\n", encoding="utf-8")
+    (inputs / "recipe.yml").write_text("output: {ARTIFACT_DIR}/recipe\n", encoding="utf-8")
+    (inputs / "eval.ini").write_text("[eval]\ncheckpoint={ARTIFACT_DIR}/training/model.pt\n", encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "plan",
+                "--source-path",
+                str(repository),
+                "--out-dir",
+                str(tmp_path / "reports"),
+                "--input-tree",
+                str(inputs),
+                "--",
+                "python",
+                "train.py",
+            ]
+        )
+        == 0
+    )
+
+    experiment = planned_path(capsys.readouterr().out)
+    assert (experiment / "inputs/train.yaml").read_text(encoding="utf-8") == (
+        f"output: {experiment}/artifacts/training\n"
+    )
+    assert (experiment / "inputs/recipe.yml").read_text(encoding="utf-8") == (
+        f"output: {experiment}/artifacts/recipe\n"
+    )
+    assert (experiment / "inputs/eval.ini").read_text(encoding="utf-8") == (
+        f"[eval]\ncheckpoint={experiment}/artifacts/training/model.pt\n"
+    )
 
 
 def test_run_summary_uses_recorded_configuration_without_environment_values(tmp_path, capsys):

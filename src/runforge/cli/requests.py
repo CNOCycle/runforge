@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from runforge.infrastructure.json_store import load_json_object
+from runforge.planning.inputs import InputTemplate
 from runforge.planning.planner import MatrixPlanRequest, PlanningError, PlanRequest
 from runforge.schemas.experiment import ExperimentCommand
 from runforge.schemas.source import PinnedGitSource
@@ -40,6 +41,7 @@ def planning_request(arguments: argparse.Namespace) -> PlanRequest:
         source_path=arguments.source_path,
         source=_pinned_source(arguments),
         environment=_environment(arguments.env_file),
+        inputs=_input_templates(arguments.input_tree),
     )
 
 
@@ -77,3 +79,33 @@ def _environment(path: Path | None) -> dict[str, str]:
             raise PlanningError(f"Empty environment key at {path}:{number}")
         environment[key] = value.strip().strip("'").strip('"')
     return environment
+
+
+def _input_templates(root: Path | None) -> tuple[InputTemplate, ...]:
+    """Capture one safe UTF-8 configuration tree for immutable plan publication."""
+    if root is None:
+        return ()
+    root = root.expanduser()
+    if root.is_symlink() or not root.is_dir():
+        raise PlanningError(f"Input tree must be a non-symlink directory: {root}")
+    templates: list[InputTemplate] = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise PlanningError(f"Input tree must not contain symbolic links: {relative}")
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise PlanningError(f"Input tree contains a non-regular file: {relative}")
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            raise PlanningError(f"Could not read UTF-8 input file {path}: {error}") from error
+        suffix = path.suffix.lower()
+        kind = (
+            "json-template" if suffix == ".json" else "text-template" if suffix in {".yaml", ".yml", ".ini"} else "copy"
+        )
+        templates.append(InputTemplate(path=relative, kind=kind, content=content))
+    if not templates:
+        raise PlanningError(f"Input tree must contain at least one regular file: {root}")
+    return tuple(templates)
