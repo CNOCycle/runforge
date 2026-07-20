@@ -15,7 +15,7 @@ from runforge.schemas.experiment import (
 from runforge.schemas.source import GitSource
 
 
-CONFIGURATION_SCHEMA_VERSION = 2
+CONFIGURATION_SCHEMA_VERSION = 3
 
 
 def _source(tmp_path):
@@ -45,15 +45,19 @@ def test_argument_command_and_configuration_round_trip(tmp_path):
 def test_configuration_records_matrix_parameters_and_decodes_schema_version_one(tmp_path):
     configuration = replace(
         _configuration(tmp_path, ExperimentCommand.argv(("python", "train.py"))),
-        parameters={"LR": "0.01", "SEED": "2"},
+        parameters={"LR": 0.01, "SEED": 2, "AMP": False},
     )
     payload = configuration.to_dict()
 
     assert payload["schema_version"] == CONFIGURATION_SCHEMA_VERSION
-    assert payload["parameters"] == {"LR": "0.01", "SEED": "2"}
+    assert payload["parameters"] == {"LR": 0.01, "SEED": 2, "AMP": False}
     assert ExperimentConfiguration.from_dict(payload) == configuration
 
     legacy = dict(payload)
+    legacy["schema_version"] = 2
+    legacy["parameters"] = {"LR": "0.01"}
+    assert ExperimentConfiguration.from_dict(legacy).parameters == {"LR": "0.01"}
+
     legacy["schema_version"] = 1
     legacy.pop("parameters")
     assert ExperimentConfiguration.from_dict(legacy).parameters == {}

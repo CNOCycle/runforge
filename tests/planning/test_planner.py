@@ -180,10 +180,17 @@ def test_matrix_planner_resolves_source_once_and_publishes_deterministic_combina
         command=ExperimentCommand.argv(("python", "train.py", "--lr={LR}", "--seed={SEED}", "--out={ARTIFACT_DIR}")),
         output_root=tmp_path / "reports",
         source=PinnedGitSource(repository=repository, commit=pinned_commit),
+        inputs=(
+            InputTemplate(
+                path="configs/train.json",
+                kind="json-template",
+                content='{"lr": "{LR}", "seed": "{SEED}", "amp": "{AMP}"}',
+            ),
+        ),
     )
     request = MatrixPlanRequest(
         template=template,
-        parameters={"SEED": [2, 1], "LR": [0.1, 0.01]},
+        parameters={"SEED": [2, 1], "LR": [0.1, 0.01], "AMP": [True]},
     )
     calls = 0
     original_resolver = planner_module.resolve_pinned_git_source
@@ -199,10 +206,10 @@ def test_matrix_planner_resolves_source_once_and_publishes_deterministic_combina
         ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json")) for experiment in experiments
     )
     expected = (
-        {"LR": "0.1", "SEED": "2"},
-        {"LR": "0.1", "SEED": "1"},
-        {"LR": "0.01", "SEED": "2"},
-        {"LR": "0.01", "SEED": "1"},
+        {"AMP": True, "LR": 0.1, "SEED": 2},
+        {"AMP": True, "LR": 0.1, "SEED": 1},
+        {"AMP": True, "LR": 0.01, "SEED": 2},
+        {"AMP": True, "LR": 0.01, "SEED": 1},
     )
 
     assert calls == 1
@@ -213,6 +220,11 @@ def test_matrix_planner_resolves_source_once_and_publishes_deterministic_combina
         assert configuration.command.arguments[-3] == f"--lr={parameters['LR']}"
         assert configuration.command.arguments[-2] == f"--seed={parameters['SEED']}"
         assert configuration.command.arguments[-1] == f"--out={experiment / 'artifacts'}"
+        assert json.loads((experiment / "inputs/configs/train.json").read_text(encoding="utf-8")) == {
+            "amp": True,
+            "lr": parameters["LR"],
+            "seed": parameters["SEED"],
+        }
 
 
 def test_matrix_planner_rejects_invalid_axis_before_creating_output(tmp_path):

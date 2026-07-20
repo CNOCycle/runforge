@@ -15,7 +15,7 @@ from pathlib import Path
 from runforge.infrastructure.clock import utc_now
 from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.planning.inputs import InputRenderingError, InputTemplate, RenderedInput, render_input_templates
-from runforge.planning.matrix import MatrixError, expand_matrix
+from runforge.planning.matrix import JsonScalar, MatrixError, expand_matrix, parameter_text
 from runforge.planning.source import (
     ResolvedGitSource,
     SourceResolutionError,
@@ -77,7 +77,7 @@ class MatrixPlanRequest:
 
     template: PlanRequest
     parameters: Mapping[str, Sequence[object]]
-    combinations: tuple[dict[str, str], ...] = field(init=False, repr=False)
+    combinations: tuple[dict[str, JsonScalar], ...] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.template, PlanRequest):
@@ -162,17 +162,20 @@ def _prepare_experiment(
     request: PlanRequest,
     resolved: ResolvedGitSource,
     destination: Path,
-    parameters: Mapping[str, str],
+    parameters: Mapping[str, JsonScalar],
     timestamp: str,
 ) -> _PreparedExperiment:
     """Build and validate immutable plan data without publishing files."""
     layout = ExperimentDirectory(destination)
-    placeholders = dict(parameters)
-    placeholders["ARTIFACT_DIR"] = str(layout.artifacts)
-    placeholders["INPUT_DIR"] = str(layout.inputs)
+    input_placeholders: dict[str, object] = dict(parameters)
+    input_placeholders["ARTIFACT_DIR"] = str(layout.artifacts)
+    input_placeholders["INPUT_DIR"] = str(layout.inputs)
+    command_placeholders = {key: parameter_text(value) for key, value in parameters.items()}
+    command_placeholders["ARTIFACT_DIR"] = str(layout.artifacts)
+    command_placeholders["INPUT_DIR"] = str(layout.inputs)
     try:
-        rendered_command = request.command.render_placeholders(placeholders)
-        rendered_inputs = render_input_templates(request.inputs, placeholders) if request.inputs else ()
+        rendered_command = request.command.render_placeholders(command_placeholders)
+        rendered_inputs = render_input_templates(request.inputs, input_placeholders) if request.inputs else ()
     except InputRenderingError as error:
         raise PlanningError(str(error)) from error
     configuration = ExperimentConfiguration(

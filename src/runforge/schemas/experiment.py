@@ -8,12 +8,19 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from runforge.schemas.source import GitSource
-from runforge.schemas.validation import require_exact_fields, require_object, require_string_mapping, require_text
+from runforge.schemas.validation import (
+    require_exact_fields,
+    require_json_scalar_mapping,
+    require_object,
+    require_string_mapping,
+    require_text,
+)
 
 
 _PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")
 EXPERIMENT_SCHEMA_VERSION = 1
-_CONFIGURATION_SCHEMA_VERSION = 2
+_PARAMETER_STRING_SCHEMA_VERSION = 2
+_CONFIGURATION_SCHEMA_VERSION = 3
 _STATUS_STATES = frozenset({"created", "init", "inprogress", "completed", "failed"})
 
 
@@ -116,7 +123,7 @@ class ExperimentConfiguration:
     environment: Mapping[str, str]
     source: GitSource
     created_at: str
-    parameters: Mapping[str, str] = field(default_factory=dict)
+    parameters: Mapping[str, str | int | float | bool] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         require_text(self.experiment_id, "experiment_id", ExperimentSchemaError)
@@ -128,7 +135,7 @@ class ExperimentConfiguration:
         if not isinstance(self.source, GitSource):
             raise ExperimentSchemaError("source must be GitSource metadata")
         require_text(self.created_at, "created_at", ExperimentSchemaError)
-        parameters = require_string_mapping(self.parameters, "parameters", ExperimentSchemaError)
+        parameters = require_json_scalar_mapping(self.parameters, "parameters", ExperimentSchemaError)
         object.__setattr__(self, "parameters", parameters)
 
     def to_dict(self) -> dict[str, Any]:
@@ -150,10 +157,14 @@ class ExperimentConfiguration:
         """Decode one exact supported configuration object."""
         data = require_object(value, "configuration", ExperimentSchemaError)
         schema_version = data.get("schema_version")
-        if schema_version not in {EXPERIMENT_SCHEMA_VERSION, _CONFIGURATION_SCHEMA_VERSION}:
+        if schema_version not in {
+            EXPERIMENT_SCHEMA_VERSION,
+            _PARAMETER_STRING_SCHEMA_VERSION,
+            _CONFIGURATION_SCHEMA_VERSION,
+        }:
             raise ExperimentSchemaError(f"Unsupported configuration schema version: {schema_version!r}")
         fields = {"kind", "schema_version", "experiment_id", "name", "command", "environment", "source", "created_at"}
-        if schema_version == _CONFIGURATION_SCHEMA_VERSION:
+        if schema_version in {_PARAMETER_STRING_SCHEMA_VERSION, _CONFIGURATION_SCHEMA_VERSION}:
             fields.add("parameters")
         require_exact_fields(
             data,
@@ -171,8 +182,12 @@ class ExperimentConfiguration:
             source=GitSource.from_dict(data["source"]),
             created_at=require_text(data["created_at"], "created_at", ExperimentSchemaError),
             parameters=(
-                require_string_mapping(data["parameters"], "parameters", ExperimentSchemaError)
-                if schema_version == _CONFIGURATION_SCHEMA_VERSION
+                (
+                    require_string_mapping(data["parameters"], "parameters", ExperimentSchemaError)
+                    if schema_version == _PARAMETER_STRING_SCHEMA_VERSION
+                    else require_json_scalar_mapping(data["parameters"], "parameters", ExperimentSchemaError)
+                )
+                if schema_version in {_PARAMETER_STRING_SCHEMA_VERSION, _CONFIGURATION_SCHEMA_VERSION}
                 else {}
             ),
         )

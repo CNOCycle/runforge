@@ -164,10 +164,10 @@ def test_cli_creates_a_pinned_cartesian_matrix(tmp_path, capsys):
         ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json")) for experiment in experiments
     ]
     assert [configuration.parameters for configuration in configurations] == [
-        {"LR": "0.1", "SEED": "1"},
-        {"LR": "0.1", "SEED": "2"},
-        {"LR": "0.01", "SEED": "1"},
-        {"LR": "0.01", "SEED": "2"},
+        {"LR": 0.1, "SEED": 1},
+        {"LR": 0.1, "SEED": 2},
+        {"LR": 0.01, "SEED": 1},
+        {"LR": 0.01, "SEED": 2},
     ]
     assert all(experiment.is_dir() for experiment in experiments)
 

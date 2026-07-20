@@ -1,7 +1,7 @@
 """Experiment planning and source normalization."""
 
 from runforge.planning.inputs import InputRenderingError, InputTemplate, RenderedInput, render_input_templates
-from runforge.planning.matrix import MatrixError, expand_matrix
+from runforge.planning.matrix import JsonScalar, MatrixError, expand_matrix, parameter_text
 from runforge.planning.planner import (
     MatrixPlanRequest,
     PlanningError,
@@ -23,6 +23,7 @@ __all__ = [
     "MatrixPlanRequest",
     "InputRenderingError",
     "InputTemplate",
+    "JsonScalar",
     "PlanRequest",
     "PlanningError",
     "ResolvedGitSource",
@@ -32,6 +33,7 @@ __all__ = [
     "expand_matrix",
     "plan_experiment",
     "plan_matrix",
+    "parameter_text",
     "resolve_current_git_source",
     "resolve_pinned_git_source",
     "render_text_template",
