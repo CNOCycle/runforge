@@ -14,6 +14,7 @@ from runforge.planning.source import (
     resolve_current_git_source,
     resolve_pinned_git_source,
 )
+from runforge.planning.text_templates import TextTemplateError, render_text_template
 
 
 __all__ = [
@@ -23,9 +24,11 @@ __all__ = [
     "PlanningError",
     "ResolvedGitSource",
     "SourceResolutionError",
+    "TextTemplateError",
     "expand_matrix",
     "plan_experiment",
     "plan_matrix",
     "resolve_current_git_source",
     "resolve_pinned_git_source",
+    "render_text_template",
 ]
