@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from runforge.cli import main
+from runforge.cli.parser import build_parser
 
 
 def _help(capsys, *arguments: str) -> str:
@@ -25,6 +26,29 @@ def test_top_level_help_lists_every_command_and_subcommand_guidance(capsys):
     for subcommand in ("plan", "launch", "matrix", "run", "retry", "discover"):
         assert subcommand in output
     assert "runforge SUBCOMMAND --help" in output
+    assert "-v, --version" in output
+
+
+def test_version_flags_print_one_line_without_a_subcommand(capsys):
+    for flag in ("--version", "-v"):
+        with pytest.raises(SystemExit) as raised:
+            main([flag])
+        assert raised.value.code == 0
+        assert capsys.readouterr().out.startswith("runforge 0.1.0+")
+
+
+@pytest.mark.parametrize(
+    "arguments, attribute",
+    [
+        (["launch", "-s", "--", "python", "train.py"], "stream_output"),
+        (["run", "-s", "experiment"], "stream_output"),
+        (["retry", "-s", "experiment"], "stream_output"),
+        (["discover", "-s", "--execute"], "stream_output"),
+        (["retry", "-f", "experiment"], "force"),
+    ],
+)
+def test_short_flags_match_their_long_option_destinations(arguments, attribute):
+    assert getattr(build_parser().parse_args(arguments), attribute) is True
 
 
 def test_plan_help_states_every_semantic_default(capsys):

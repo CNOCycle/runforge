@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from runforge.version import display_version
+
 
 class SemanticDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
     """Show literal defaults automatically while preserving semantic descriptions."""
@@ -24,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="Use 'runforge SUBCOMMAND --help' for detailed subcommand options.",
         formatter_class=SemanticDefaultsHelpFormatter,
     )
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {display_version()}")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     plan = subparsers.add_parser(
@@ -77,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_stream_output_argument(retry)
     retry.add_argument(
+        "-f",
         "--force",
         action="store_true",
         help="retry an inprogress experiment after independently confirming its worker stopped (default: disabled)",
@@ -163,6 +167,7 @@ def _add_planning_arguments(parser: argparse.ArgumentParser, *, pinned_only: boo
 
 def _add_stream_output_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
+        "-s",
         "--stream-output",
         action="store_true",
         help="stream stdout and stderr while preserving log files (default: disabled)",
