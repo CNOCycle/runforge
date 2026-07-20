@@ -14,7 +14,7 @@ from runforge.schemas.validation import require_exact_fields, require_object, re
 INPUT_MANIFEST_SCHEMA_VERSION = 1
 INPUT_MANIFEST_FILE = "input-manifest.json"
 INPUTS_DIRECTORY = "inputs"
-_INPUT_KINDS = frozenset({"copy", "text-template"})
+_INPUT_KINDS = frozenset({"copy", "json-template", "text-template"})
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
