@@ -73,7 +73,7 @@ class PlanRequest:
 
 @dataclass(frozen=True)
 class MatrixPlanRequest:
-    """A pinned plan template plus one validated Cartesian parameter matrix."""
+    """A plan template plus one validated Cartesian parameter matrix, sharing one resolved source."""
 
     template: PlanRequest
     parameters: Mapping[str, Sequence[object]]
@@ -82,8 +82,6 @@ class MatrixPlanRequest:
     def __post_init__(self) -> None:
         if not isinstance(self.template, PlanRequest):
             raise PlanningError("template must be PlanRequest metadata")
-        if self.template.source is None:
-            raise PlanningError("matrix planning requires a pinned Git source")
         try:
             combinations = expand_matrix(self.parameters)
         except MatrixError as error:
@@ -106,8 +104,11 @@ def plan_experiment(request: PlanRequest) -> Path:
 
 
 def plan_matrix(request: MatrixPlanRequest) -> tuple[Path, ...]:
-    """Create one experiment plan per deterministic pinned-source combination."""
-    return _plan_resolved_matrix(request, _resolve_source(request.template))
+    """Create one experiment plan per parameter combination, sharing one resolved source."""
+    resolved = _resolve_source(request.template)
+    created = _plan_resolved_matrix(request, resolved)
+    _warn_untracked(resolved.source.untracked_files)
+    return created
 
 
 def _resolve_source(request: PlanRequest) -> ResolvedGitSource:

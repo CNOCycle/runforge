@@ -8,7 +8,7 @@ source state the planner intended.
 
 The first-class workflow is Git-backed. A plan can either capture the current
 `HEAD` plus tracked changes or use an explicit pinned commit/ref and optional
-external patch. Pinned sources can also expand a deterministic parameter matrix
+external patch. Both source modes can expand a deterministic parameter matrix
 into independent plans. Planning never executes the experiment command.
 Running later reconstructs the normalized source in a detached worktree.
 
@@ -196,8 +196,9 @@ the plan. Pinned plans are placed under the `pinned/` report branch slug.
 
 ## Parameter Matrices
 
-Matrix planning requires one pinned source and a JSON object whose values are
-non-empty arrays of strings, numbers, or booleans:
+Matrix planning takes one Git source (current-HEAD or pinned, same as `plan`)
+and a JSON object whose values are non-empty arrays of strings, numbers, or
+booleans:
 
 ```json
 {
@@ -212,18 +213,20 @@ runforge matrix \
   --matrix-file matrix.json \
   --out-dir "$REPORT_ROOT" \
   --source-path "$REPO" \
-  --commit v1.2.0 \
   -- python train.py --lr '{LR}' --seed '{SEED}' --output '{ARTIFACT_DIR}'
 ```
 
-`matrix` uses pinned-Git mode by default. Parameter names are sorted to define
+`matrix` uses current-HEAD mode by default. To sweep an explicit revision, pass
+`--source-mode pinned-git --commit v1.2.0`. Parameter names are sorted to define
 axis order, while each array's value order is preserved. Every Cartesian
-combination receives its own normal experiment directory and a rendered command;
-the selected values are also stored in `config.json` under `parameters`. The CLI
-prints every created directory.
+combination receives its own normal experiment directory and a rendered
+command; the selected values are also stored in `config.json` under
+`parameters`. The CLI prints every created directory.
 
-Matrix planning resolves and validates the source once, validates every
-combination before publication, and does not execute any experiment. Use
+Matrix planning resolves and validates the source once and shares that single
+resolved commit (and, in current-HEAD mode, the same captured patch and
+untracked-file warning) across every combination, validates every combination
+before publication, and does not execute any experiment. Use
 `runforge run EXPERIMENT_DIRECTORY` for each resulting plan.
 
 ## Discover Planned Experiments
@@ -381,7 +384,11 @@ when they are present, so do not make the command depend on them.
 In pinned mode RunForge resolves only the supplied repository and commit/ref. It
 does not infer source from the current checkout. An optional external patch is
 captured, hashed, and checked against a detached worktree at the resolved commit.
-Matrix plans all share that same resolved commit and patch identity.
+
+`matrix` resolves its source exactly once, before expanding any combination, and
+every resulting plan shares that same resolved commit and patch identity. In
+current-HEAD mode this means the whole sweep is anchored to one `HEAD` snapshot
+taken at matrix-planning time, not re-read per combination.
 
 At run time the worker creates a detached worktree at the recorded commit,
 checks the stored patch SHA-256, applies the patch, then runs the recorded
