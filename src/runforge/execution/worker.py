@@ -135,7 +135,7 @@ def _execute(
         raise WorkerError(str(error)) from error
 
     with tempfile.TemporaryDirectory(prefix="runforge-worker-", dir=repository.root.parent) as temporary_root:
-        worktree = Path(temporary_root) / "worktree"
+        worktree = Path(temporary_root)
         try:
             repository.create_detached_worktree(worktree, configuration.source.commit)
             _apply_recorded_patch(
