@@ -28,7 +28,9 @@ def test_worker_executes_recorded_commit_and_patch_then_cleans_worktree(tmp_path
         (
             "from pathlib import Path\n"
             "import os\n"
-            "Path(os.environ['RUNFORGE_ARTIFACT_DIR']).joinpath('result.txt').write_text('base')\n"
+            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
+            "artifact_dir.joinpath('result.txt').write_text('base')\n"
+            "artifact_dir.joinpath('worktree.txt').write_text(str(Path.cwd()))\n"
         ),
     )
     train = repository / "train.py"
@@ -47,6 +49,10 @@ def test_worker_executes_recorded_commit_and_patch_then_cleans_worktree(tmp_path
 
     status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
     assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "patched"
+    worker_path = Path((experiment / "artifacts" / "worktree.txt").read_text(encoding="utf-8"))
+    assert worker_path.name.startswith("runforge-worker-")
+    assert worker_path.parent == repository.parent
+    assert not worker_path.exists()
     assert status.state == "completed"
     assert status.attempt == 1
     assert status.exit_code == 0
