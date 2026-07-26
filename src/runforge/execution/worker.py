@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,7 +18,12 @@ from runforge.infrastructure.clock import utc_now
 from runforge.infrastructure.directory_scan import DirectoryScanError, ScannedFile, scan_directory
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.infrastructure.storage import ExperimentDirectory
-from runforge.schemas.directory_source import DirectorySourceEntry, DirectorySourceManifest, VerifiedDirectorySource
+from runforge.schemas.directory_source import (
+    DirectorySnapshotSource,
+    DirectorySourceEntry,
+    DirectorySourceManifest,
+    VerifiedDirectorySource,
+)
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 
 
@@ -144,6 +150,10 @@ def _execute(
         return _execute_verified_directory(
             experiment, configuration, status, stream_output=stream_output, progress=progress
         )
+    if isinstance(configuration.source, DirectorySnapshotSource):
+        return _execute_directory_snapshot(
+            experiment, configuration, status, stream_output=stream_output, progress=progress
+        )
     return _execute_git(experiment, configuration, status, stream_output=stream_output, progress=progress)
 
 
@@ -199,6 +209,27 @@ def _execute_verified_directory(
     )
 
 
+def _execute_directory_snapshot(
+    experiment: ExperimentDirectory,
+    configuration: ExperimentConfiguration,
+    status: ExperimentStatus,
+    *,
+    stream_output: bool,
+    progress: Callable[[WorkerProgressEvent], None] | None,
+) -> int:
+    source = configuration.source
+    _verify_directory_snapshot_source(experiment, source)
+    with tempfile.TemporaryDirectory(prefix="runforge-worker-") as temporary_root:
+        workspace = Path(temporary_root) / "source"
+        try:
+            shutil.copytree(experiment.snapshot_source_directory, workspace)
+        except OSError as error:
+            raise WorkerError(f"Could not materialize captured directory-snapshot source: {error}") from error
+        return _run_in_working_directory(
+            experiment, configuration, status, workspace, _ExecutionOptions(stream_output, progress)
+        )
+
+
 def _run_in_working_directory(
     experiment: ExperimentDirectory,
     configuration: ExperimentConfiguration,
@@ -234,27 +265,53 @@ def _verify_verified_directory_source(experiment: ExperimentDirectory, source: V
     """Reject a missing, moved, or changed verified-directory source before execution."""
     if source.path.is_symlink() or not source.path.is_dir():
         raise WorkerError(f"Verified-directory source is missing or not a directory: {source.path}")
-    manifest = _load_verified_source_manifest(experiment, source)
+    _verify_directory_matches_manifest(
+        experiment,
+        source.path,
+        source.tree_digest,
+        changed_message="Verified-directory source has changed since planning",
+    )
+
+
+def _verify_directory_snapshot_source(experiment: ExperimentDirectory, source: DirectorySnapshotSource) -> None:
+    """Reject a missing, expanded, or changed captured directory-snapshot before execution."""
+    snapshot_dir = experiment.snapshot_source_directory
+    if snapshot_dir.is_symlink() or not snapshot_dir.is_dir():
+        raise WorkerError(f"Captured directory-snapshot source is missing: {snapshot_dir}")
+    _verify_directory_matches_manifest(
+        experiment,
+        snapshot_dir,
+        source.tree_digest,
+        changed_message="Captured directory-snapshot source has changed since planning",
+    )
+
+
+def _verify_directory_matches_manifest(
+    experiment: ExperimentDirectory,
+    directory: Path,
+    tree_digest: str,
+    *,
+    changed_message: str,
+) -> None:
+    manifest = _load_directory_source_manifest(experiment, tree_digest)
     try:
-        scan = scan_directory(source.path)
+        scan = scan_directory(directory)
     except DirectoryScanError as error:
         raise WorkerError(str(error)) from error
     expected = {entry.path: entry for entry in manifest.entries}
     actual = {entry.path: entry for entry in scan.files}
     _require_matching_source_paths(expected, actual)
     _require_matching_source_entries(expected, actual)
-    if scan.tree_digest != source.tree_digest:
-        raise WorkerError("Verified-directory source has changed since planning")
+    if scan.tree_digest != tree_digest:
+        raise WorkerError(changed_message)
 
 
-def _load_verified_source_manifest(
-    experiment: ExperimentDirectory, source: VerifiedDirectorySource
-) -> DirectorySourceManifest:
+def _load_directory_source_manifest(experiment: ExperimentDirectory, tree_digest: str) -> DirectorySourceManifest:
     try:
         manifest = experiment.load_directory_source_manifest()
     except ValueError as error:
         raise WorkerError(str(error)) from error
-    if manifest.tree_digest != source.tree_digest:
+    if manifest.tree_digest != tree_digest:
         raise WorkerError("Recorded source manifest digest does not match configuration")
     return manifest
 
@@ -264,18 +321,18 @@ def _require_matching_source_paths(expected: dict[str, object], actual: dict[str
     missing = sorted(set(expected) - set(actual))
     unexpected = sorted(set(actual) - set(expected))
     if missing:
-        raise WorkerError(f"Verified-directory source file is missing: {missing[0]}")
+        raise WorkerError(f"Source file is missing: {missing[0]}")
     if unexpected:
-        raise WorkerError(f"Unexpected verified-directory source file: {unexpected[0]}")
+        raise WorkerError(f"Unexpected source file: {unexpected[0]}")
 
 
 def _require_matching_source_entries(expected: dict[str, DirectorySourceEntry], actual: dict[str, ScannedFile]) -> None:
     for path, expected_entry in expected.items():
         actual_entry = actual[path]
         if actual_entry.sha256 != expected_entry.sha256:
-            raise WorkerError(f"Verified-directory source file checksum does not match manifest: {path}")
+            raise WorkerError(f"Source file checksum does not match manifest: {path}")
         if actual_entry.executable != expected_entry.executable:
-            raise WorkerError(f"Verified-directory source file executable bit does not match manifest: {path}")
+            raise WorkerError(f"Source file executable bit does not match manifest: {path}")
 
 
 def _apply_recorded_patch(

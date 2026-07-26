@@ -362,3 +362,127 @@ def test_worker_records_verified_directory_command_failure(tmp_path):
     status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
     assert status.state == "failed"
     assert status.error == "Command exited with status 7"
+
+
+def test_worker_executes_directory_snapshot_source_from_isolated_workspace(tmp_path):
+    source = _verified_directory_source(
+        tmp_path,
+        (
+            "from pathlib import Path\n"
+            "import os\n"
+            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
+            "artifact_dir.joinpath('result.txt').write_text('base')\n"
+            "artifact_dir.joinpath('cwd.txt').write_text(str(Path.cwd()))\n"
+        ),
+    )
+    experiment = plan_experiment(
+        PlanRequest(
+            name="snapshot",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="directory-snapshot",
+        )
+    )
+    shutil.rmtree(source)
+
+    assert run_experiment(experiment) == 0
+
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    workspace = Path((experiment / "artifacts" / "cwd.txt").read_text(encoding="utf-8"))
+    assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "base"
+    assert workspace.name == "source"
+    assert workspace.parent.name.startswith("runforge-worker-")
+    assert not workspace.exists()
+    assert status.state == "completed"
+    assert status.attempt == 1
+    assert status.exit_code == 0
+
+
+def test_worker_directory_snapshot_execution_does_not_modify_captured_source(tmp_path):
+    source = _verified_directory_source(
+        tmp_path,
+        "from pathlib import Path\nPath('created-by-command.txt').write_text('side effect')\n",
+    )
+    experiment = plan_experiment(
+        PlanRequest(
+            name="snapshot",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="directory-snapshot",
+        )
+    )
+
+    assert run_experiment(experiment) == 0
+
+    assert sorted(path.name for path in (experiment / "source").iterdir()) == ["train.py"]
+
+
+def test_worker_rejects_missing_captured_directory_snapshot_source(tmp_path):
+    source = _verified_directory_source(tmp_path, "print('should not run')\n")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="snapshot",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="directory-snapshot",
+        )
+    )
+    shutil.rmtree(experiment / "source")
+
+    with pytest.raises(WorkerError, match="Captured directory-snapshot source is missing"):
+        run_experiment(experiment)
+
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    assert status.state == "failed"
+    assert status.attempt == 0
+
+
+@pytest.mark.parametrize(
+    "mutation, match",
+    [
+        (lambda captured: (captured / "train.py").write_text("changed", encoding="utf-8"), "checksum"),
+        (lambda captured: (captured / "extra.txt").write_text("unexpected", encoding="utf-8"), "Unexpected"),
+        (lambda captured: (captured / "train.py").unlink(), "missing"),
+    ],
+)
+def test_worker_rejects_tampered_captured_directory_snapshot_source(tmp_path, mutation, match):
+    source = _verified_directory_source(tmp_path, "raise SystemExit('must not execute')\n")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="snapshot",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="directory-snapshot",
+        )
+    )
+    mutation(experiment / "source")
+
+    with pytest.raises(WorkerError, match=match):
+        run_experiment(experiment)
+
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    assert status.state == "failed"
+    assert status.attempt == 0
+
+
+def test_worker_records_directory_snapshot_command_failure(tmp_path):
+    source = _verified_directory_source(tmp_path, "raise SystemExit(7)\n")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="snapshot",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="directory-snapshot",
+        )
+    )
+
+    assert run_experiment(experiment) == FAILURE_EXIT_CODE
+
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    assert status.state == "failed"
+    assert status.error == "Command exited with status 7"
