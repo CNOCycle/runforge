@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from runforge.cli import main
@@ -16,13 +18,16 @@ def _help(capsys, *arguments: str) -> str:
 
 
 def _single_line(value: str) -> str:
-    return " ".join(value.split())
+    # argparse wraps long help text at column width, including inside existing
+    # hyphenated words; undo that line-wrap artifact before collapsing whitespace.
+    unwrapped = re.sub(r"-\n\s*", "-", value)
+    return " ".join(unwrapped.split())
 
 
 def test_top_level_help_lists_every_command_and_subcommand_guidance(capsys):
     output = _help(capsys)
 
-    assert "Plan, inspect, and run reproducible Git-backed experiments." in output
+    assert "Plan, inspect, and run reproducible Git-backed and non-Git experiments." in output
     for subcommand in ("plan", "launch", "matrix", "run", "retry", "discover"):
         assert subcommand in output
     assert "runforge SUBCOMMAND --help" in output
@@ -57,8 +62,11 @@ def test_plan_help_states_every_semantic_default(capsys):
     assert "--name NAME" in output
     assert "(default: exp)" in output
     assert output.count("(default: exp)") == 1
-    assert "(default: SOURCE_REPOSITORY/reports)" in output
+    assert "(default: SOURCE_REPOSITORY/reports for current-head and pinned-git" in output
+    assert "required and must resolve outside --source-path for verified-directory and directory-snapshot)" in output
     assert "(default: current directory)" in output
+    assert "verified-directory (live external path, re-verified before every run)" in output
+    assert "directory-snapshot (self-contained captured copy)" in output
     assert "(default: current-head)" in output
     assert output.count("(default: current-head)") == 1
     assert "commit or ref for a pinned Git source (default: not set)" in output
@@ -76,6 +84,18 @@ def test_matrix_help_describes_current_head_default_and_pinned_requirements(caps
     assert "required when --source-mode is pinned-git" in output
     assert "--source-mode" in output
     assert "(default: current-head)" in output
+    assert "verified-directory" in output
+    assert "directory-snapshot" in output
+
+
+@pytest.mark.parametrize("subcommand", ["plan", "launch", "matrix"])
+def test_planning_subcommands_advertise_non_git_source_modes(capsys, subcommand):
+    output = _single_line(_help(capsys, subcommand))
+
+    assert "current-head,pinned-git,verified-directory,directory-snapshot" in output
+    assert "verified-directory (live external path, re-verified before every run)" in output
+    assert "directory-snapshot (self-contained captured copy)" in output
+    assert "must resolve outside --source-path for verified-directory and directory-snapshot" in output
 
 
 def test_run_help_describes_safe_execution_defaults(capsys):

@@ -14,7 +14,9 @@ from runforge.execution.worker import WorkerProgressEvent
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.planning.planner import PlanRequest
+from runforge.schemas.directory_source import DirectorySnapshotSource, VerifiedDirectorySource
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
+from runforge.schemas.source import GitSource
 
 
 _DISCOVERY_STATES = ("created", "init", "inprogress", "completed", "failed")
@@ -25,10 +27,9 @@ def print_discovery(result: DiscoveryResult) -> None:
     print(f"Experiments discovered under: {result.root}")
     if result.experiments:
         for experiment in result.experiments:
-            source = experiment.configuration.source
             print(
                 f"{experiment.status.state} | attempt={experiment.status.attempt} "
-                f"| name={experiment.configuration.name} | source={source.branch}@{source.commit[:8]} "
+                f"| name={experiment.configuration.name} | source={_source_identity_text(experiment.configuration)} "
                 f"| path={experiment.path}"
             )
     else:
@@ -42,6 +43,18 @@ def print_discovery(result: DiscoveryResult) -> None:
     for state in _DISCOVERY_STATES:
         print(f"  {state}: {counts[state]}")
     print(f"  invalid: {len(result.diagnostics)}")
+
+
+def _source_identity_text(configuration: ExperimentConfiguration) -> str:
+    """Render one persisted source's identity for discovery listings."""
+    source = configuration.source
+    if isinstance(source, GitSource):
+        return f"{source.branch}@{source.commit[:8]}"
+    if isinstance(source, VerifiedDirectorySource):
+        return f"verified@{source.tree_digest[:8]}"
+    if isinstance(source, DirectorySnapshotSource):
+        return f"snapshot@{source.tree_digest[:8]}"
+    return "unknown"
 
 
 def print_planning_arguments(

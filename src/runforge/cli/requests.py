@@ -40,13 +40,14 @@ def planning_request(arguments: argparse.Namespace) -> PlanRequest:
         output_root=arguments.out_dir,
         source_path=arguments.source_path,
         source=_pinned_source(arguments),
+        directory_source_mode=_directory_source_mode(arguments),
         environment=_environment(arguments.env_file),
         inputs=_input_templates(arguments.input_tree),
     )
 
 
 def _pinned_source(arguments: argparse.Namespace) -> PinnedGitSource | None:
-    if arguments.source_mode == "current-head":
+    if arguments.source_mode != "pinned-git":
         if arguments.commit is not None or arguments.patch is not None:
             raise PlanningError("--commit and --patch require --source-mode pinned-git")
         return None
@@ -57,6 +58,12 @@ def _pinned_source(arguments: argparse.Namespace) -> PinnedGitSource | None:
         commit=arguments.commit,
         patch=arguments.patch,
     )
+
+
+def _directory_source_mode(arguments: argparse.Namespace) -> str | None:
+    if arguments.source_mode in {"verified-directory", "directory-snapshot"}:
+        return arguments.source_mode
+    return None
 
 
 def _environment(path: Path | None) -> dict[str, str]:
