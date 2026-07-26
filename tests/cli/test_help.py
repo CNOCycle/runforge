@@ -68,13 +68,14 @@ def test_plan_help_states_every_semantic_default(capsys):
     assert "shell pipeline (default: disabled)" in output
 
 
-def test_matrix_help_describes_implicit_pinned_mode_and_required_inputs(capsys):
+def test_matrix_help_describes_current_head_default_and_pinned_requirements(capsys):
     output = _single_line(_help(capsys, "matrix"))
 
-    assert "required pinned Git source" in output
     assert "JSON object defining matrix parameters (required)" in output
-    assert "commit or ref for a pinned Git source (required)" in output
-    assert "--source-mode" not in output
+    assert "commit or ref for a pinned Git source (default: not set)" in output
+    assert "required when --source-mode is pinned-git" in output
+    assert "--source-mode" in output
+    assert "(default: current-head)" in output
 
 
 def test_run_help_describes_safe_execution_defaults(capsys):

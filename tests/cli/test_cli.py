@@ -12,6 +12,7 @@ from tests.support import create_git_repository, git, planned_path
 
 CLI_ERROR_EXIT = 2
 MATRIX_PLAN_COUNT = 4
+CURRENT_HEAD_MATRIX_PLAN_COUNT = 2
 
 
 def _repository(tmp_path: Path) -> Path:
@@ -135,6 +136,8 @@ def test_cli_creates_a_pinned_cartesian_matrix(tmp_path, capsys):
                 "matrix",
                 "--matrix-file",
                 str(matrix_file),
+                "--source-mode",
+                "pinned-git",
                 "--commit",
                 "HEAD",
                 "--source-path",
@@ -170,6 +173,43 @@ def test_cli_creates_a_pinned_cartesian_matrix(tmp_path, capsys):
         {"LR": 0.01, "SEED": 2},
     ]
     assert all(experiment.is_dir() for experiment in experiments)
+
+
+def test_cli_creates_a_current_head_cartesian_matrix(tmp_path, capsys):
+    repository = _repository(tmp_path)
+    matrix_file = tmp_path / "matrix.json"
+    save_json_object(matrix_file, {"SEED": [1, 2]})
+    pinned_commit = git(repository, "rev-parse", "HEAD")
+
+    assert (
+        main(
+            [
+                "matrix",
+                "--matrix-file",
+                str(matrix_file),
+                "--source-path",
+                str(repository),
+                "--out-dir",
+                str(tmp_path / "reports"),
+                "--",
+                "python",
+                "train.py",
+                "--seed={SEED}",
+            ]
+        )
+        == 0
+    )
+    full_output = capsys.readouterr().out
+    assert "  source mode: current-head" in full_output
+    assert "  commit/ref: not set" in full_output
+    output = full_output.splitlines()
+    summary_index = output.index(f"Experiment plans created ({CURRENT_HEAD_MATRIX_PLAN_COUNT}):")
+    experiments = tuple(Path(line.strip()) for line in output[summary_index + 1 :])
+    assert len(experiments) == CURRENT_HEAD_MATRIX_PLAN_COUNT
+    configurations = [
+        ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json")) for experiment in experiments
+    ]
+    assert {configuration.source.commit for configuration in configurations} == {pinned_commit}
 
 
 def test_cli_launches_a_new_experiment_immediately(tmp_path, capsys):

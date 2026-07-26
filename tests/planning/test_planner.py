@@ -245,13 +245,41 @@ def test_matrix_planner_rejects_invalid_axis_before_creating_output(tmp_path):
 
     assert not output_root.exists()
 
-    current_template = PlanRequest(
-        name="current matrix",
-        command=ExperimentCommand.argv(("python", "train.py")),
+
+def test_matrix_planner_supports_current_head_source_resolved_once_with_shared_warning(tmp_path, monkeypatch):
+    repository = _repository(tmp_path)
+    (repository / "untracked.txt").write_text("not captured\n", encoding="utf-8")
+    template = PlanRequest(
+        name="current sweep",
+        command=ExperimentCommand.argv(("python", "train.py", "--lr={LR}", "--out={ARTIFACT_DIR}")),
+        output_root=tmp_path / "reports",
         source_path=repository,
     )
-    with pytest.raises(PlanningError, match="requires a pinned Git source"):
-        MatrixPlanRequest(template=current_template, parameters={"LR": [0.1]})
+    request = MatrixPlanRequest(template=template, parameters={"LR": [0.1, 0.01]})
+    calls = 0
+    original_resolver = planner_module.resolve_current_git_source
+
+    def count_resolution(source_path):
+        nonlocal calls
+        calls += 1
+        return original_resolver(source_path)
+
+    monkeypatch.setattr(planner_module, "resolve_current_git_source", count_resolution)
+
+    with pytest.warns(UserWarning, match="untracked files") as warning:
+        experiments = plan_matrix(request)
+
+    expected_commit = git(repository, "rev-parse", "HEAD")
+    configurations = tuple(
+        ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json")) for experiment in experiments
+    )
+    assert calls == 1
+    assert len(warning) == 1
+    assert {configuration.source.commit for configuration in configurations} == {expected_commit}
+    assert {configuration.source.branch for configuration in configurations} == {
+        git(repository, "branch", "--show-current")
+    }
+    assert all(configuration.source.untracked_files == ("untracked.txt",) for configuration in configurations)
 
 
 def test_planner_reports_invalid_non_git_source_path(tmp_path):

@@ -21,7 +21,7 @@ from runforge.cli.requests import matrix_request, planning_request
 from runforge.execution.discovery import DiscoveryError, DiscoveryResult, discover_experiments
 from runforge.execution.retry import RetryError, prepare_retry
 from runforge.execution.worker import WorkerError, run_experiment
-from runforge.planning.planner import PlanningError, PlanRequest, plan_experiment, plan_matrix
+from runforge.planning.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -41,7 +41,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ("matrix combinations", str(len(request.combinations))),
                 ),
             )
-            experiments = plan_matrix(request)
+            experiments = _plan_matrix_with_warnings(request)
             print(f"Experiment plans created ({len(experiments)}):", flush=True)
             for experiment in experiments:
                 print(f"  {experiment}", flush=True)
@@ -133,3 +133,12 @@ def _plan_with_warnings(request: PlanRequest) -> Path:
     for captured_warning in captured:
         print(f"warning: {captured_warning.message}", file=sys.stderr)
     return experiment
+
+
+def _plan_matrix_with_warnings(request: MatrixPlanRequest) -> tuple[Path, ...]:
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        experiments = plan_matrix(request)
+    for captured_warning in captured:
+        print(f"warning: {captured_warning.message}", file=sys.stderr)
+    return experiments

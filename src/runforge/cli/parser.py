@@ -48,8 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     matrix = subparsers.add_parser(
         "matrix",
-        help="create a pinned-source Cartesian experiment matrix",
-        description="Create a Cartesian matrix of plans using one required pinned Git source.",
+        help="create a Cartesian experiment matrix from one shared source",
+        description="Create a Cartesian matrix of plans that all share one resolved Git source.",
         formatter_class=SemanticDefaultsHelpFormatter,
     )
     matrix.add_argument(
@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="JSON object defining matrix parameters (required)",
     )
-    _add_planning_arguments(matrix, pinned_only=True)
+    _add_planning_arguments(matrix)
 
     run = subparsers.add_parser(
         "run",
@@ -111,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _add_planning_arguments(parser: argparse.ArgumentParser, *, pinned_only: bool = False) -> None:
+def _add_planning_arguments(parser: argparse.ArgumentParser, *, default_source_mode: str = "current-head") -> None:
     parser.add_argument("--name", default="exp", help="short experiment name")
     parser.add_argument(
         "--out-dir",
@@ -124,20 +124,15 @@ def _add_planning_arguments(parser: argparse.ArgumentParser, *, pinned_only: boo
         default=Path("."),
         help="path within the source Git repository (default: current directory)",
     )
-    if pinned_only:
-        parser.set_defaults(source_mode="pinned-git")
-    else:
-        parser.add_argument(
-            "--source-mode",
-            choices=("current-head", "pinned-git"),
-            default="current-head",
-            help="source selection mode",
-        )
-    commit_requirement = "required" if pinned_only else "default: not set"
+    parser.add_argument(
+        "--source-mode",
+        choices=("current-head", "pinned-git"),
+        default=default_source_mode,
+        help="source selection mode",
+    )
     parser.add_argument(
         "--commit",
-        required=pinned_only,
-        help=f"commit or ref for a pinned Git source ({commit_requirement})",
+        help="commit or ref for a pinned Git source (default: not set); required when --source-mode is pinned-git",
     )
     parser.add_argument(
         "--patch",
