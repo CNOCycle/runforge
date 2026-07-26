@@ -103,8 +103,6 @@ class MatrixPlanRequest:
     def __post_init__(self) -> None:
         if not isinstance(self.template, PlanRequest):
             raise PlanningError("template must be PlanRequest metadata")
-        if self.template.directory_source_mode is not None:
-            raise PlanningError("Matrix planning does not yet support directory_source_mode")
         try:
             combinations = expand_matrix(self.parameters)
         except MatrixError as error:
@@ -132,7 +130,12 @@ def plan_experiment(request: PlanRequest) -> Path:
 
 def plan_matrix(request: MatrixPlanRequest) -> tuple[Path, ...]:
     """Create one experiment plan per parameter combination, sharing one resolved source."""
-    resolved = _resolve_source(request.template)
+    template = request.template
+    if template.directory_source_mode == "verified-directory":
+        return _plan_verified_directory_matrix(request)
+    if template.directory_source_mode == "directory-snapshot":
+        return _plan_directory_snapshot_matrix(request)
+    resolved = _resolve_source(template)
     created = _plan_resolved_matrix(request, resolved)
     _warn_untracked(resolved.source.untracked_files)
     return created
@@ -209,17 +212,78 @@ def _plan_resolved_matrix(request: MatrixPlanRequest, resolved: ResolvedGitSourc
     template = request.template
     source = resolved.source
     output_root = template.output_root or resolved.repository.root / _DEFAULT_OUTPUT_ROOT
+    prepared = _prepare_matrix(request, source, output_root, source.branch, source.commit)
+    return _publish_all(prepared, patch=resolved.patch)
+
+
+def _plan_verified_directory_matrix(request: MatrixPlanRequest) -> tuple[Path, ...]:
+    """Scan once and publish independent verified-directory plans without copying source bytes."""
+    template = request.template
+    try:
+        resolved = resolve_verified_directory_source(template.source_path)
+    except DirectorySourceResolutionError as error:
+        raise PlanningError(str(error)) from error
+    source = resolved.source
+    if template.output_root is None:
+        raise PlanningError("output_root is required for verified-directory plans")
+    output_root = template.output_root.expanduser().resolve()
+    _require_output_root_outside_source(output_root, source.path)
+    band = _DIRECTORY_SOURCE_BANDS["verified-directory"]
+    prepared = _prepare_matrix(request, source, output_root, band, source.tree_digest)
+    return _publish_all(prepared, directory_manifest=resolved.manifest)
+
+
+def _plan_directory_snapshot_matrix(request: MatrixPlanRequest) -> tuple[Path, ...]:
+    """Capture the source once and publish independent self-contained snapshot plans."""
+    template = request.template
+    try:
+        resolved = resolve_directory_snapshot_source(template.source_path)
+    except DirectorySourceResolutionError as error:
+        raise PlanningError(str(error)) from error
+    try:
+        source = resolved.source
+        if template.output_root is None:
+            raise PlanningError("output_root is required for directory-snapshot plans")
+        output_root = template.output_root.expanduser().resolve()
+        _require_output_root_outside_source(output_root, source.original_path)
+        band = _DIRECTORY_SOURCE_BANDS["directory-snapshot"]
+        prepared = _prepare_matrix(request, source, output_root, band, source.tree_digest)
+        return _publish_all(prepared, directory_manifest=resolved.manifest, captured_source=resolved.captured_source)
+    finally:
+        shutil.rmtree(resolved.staging_root, ignore_errors=True)
+
+
+def _prepare_matrix(
+    request: MatrixPlanRequest,
+    source: GitSource | VerifiedDirectorySource | DirectorySnapshotSource,
+    output_root: Path,
+    band: str,
+    identity: str,
+) -> list[_PreparedExperiment]:
+    """Build immutable plan data for every combination, sharing one resolved source."""
+    template = request.template
     reserved: set[Path] = set()
     timestamp = utc_now()
     prepared: list[_PreparedExperiment] = []
     for parameters in request.combinations:
-        destination = _destination(output_root, source.branch, source.commit, template.name, reserved=reserved)
+        destination = _destination(output_root, band, identity, template.name, reserved=reserved)
         reserved.add(destination)
         prepared.append(_prepare_experiment(template, source, destination, parameters, timestamp))
+    return prepared
+
+
+def _publish_all(
+    prepared: Sequence[_PreparedExperiment],
+    *,
+    patch: bytes | None = None,
+    directory_manifest: DirectorySourceManifest | None = None,
+    captured_source: Path | None = None,
+) -> tuple[Path, ...]:
+    """Publish every prepared experiment, removing all of them if any publication fails."""
     created: list[Path] = []
     try:
         for experiment in prepared:
-            _publish(experiment, patch=resolved.patch)
+            _publish(experiment, patch=patch, directory_manifest=directory_manifest, captured_source=captured_source)
             created.append(experiment.destination)
     except Exception:
         for destination in created:
@@ -311,7 +375,7 @@ def _publish(
         if directory_manifest is not None:
             layout.save_directory_source_manifest(directory_manifest)
         if captured_source is not None:
-            shutil.move(str(captured_source), str(layout.snapshot_source_directory))
+            shutil.copytree(captured_source, layout.snapshot_source_directory)
         os.replace(temporary, destination)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)

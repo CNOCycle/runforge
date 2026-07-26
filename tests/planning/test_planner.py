@@ -20,6 +20,9 @@ from runforge.schemas.source import PinnedGitSource
 from tests.support import create_git_repository, git
 
 
+_SEED_COMBINATION_COUNT = 2
+
+
 def _repository(tmp_path: Path) -> Path:
     return create_git_repository(tmp_path / "repository", {"train.py": "VALUE = 1\n"})
 
@@ -389,18 +392,85 @@ def test_plan_request_rejects_directory_source_mode_with_pinned_git_source(tmp_p
         )
 
 
-def test_matrix_plan_request_rejects_directory_source_mode(tmp_path):
+def test_matrix_planner_publishes_independent_verified_directory_plans_from_one_scan(tmp_path):
+    source = _verified_directory_source(tmp_path)
+    template = PlanRequest(
+        name="ablation",
+        command=ExperimentCommand.argv(("python", "train.py", "--seed={SEED}")),
+        source_path=source,
+        output_root=tmp_path / "reports",
+        directory_source_mode="verified-directory",
+    )
+
+    experiments = plan_matrix(MatrixPlanRequest(template=template, parameters={"SEED": [1, 2]}))
+
+    assert len(experiments) == _SEED_COMBINATION_COUNT
+    configurations = [
+        ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json")) for experiment in experiments
+    ]
+    assert {configuration.command.arguments[-1] for configuration in configurations} == {
+        "--seed=1",
+        "--seed=2",
+    }
+    assert all(
+        configuration.source.to_dict()["kind"] == "runforge_verified_directory_source"
+        for configuration in configurations
+    )
+    manifests = [load_json_object(experiment / "source-manifest.json") for experiment in experiments]
+    assert manifests[0] == manifests[1]
+    assert all(experiment.parent.name == "verified" for experiment in experiments)
+    assert len({experiment.name for experiment in experiments}) == _SEED_COMBINATION_COUNT
+
+
+def test_matrix_planner_publishes_independent_directory_snapshot_plans_from_one_capture(tmp_path):
+    source = _verified_directory_source(tmp_path)
+    template = PlanRequest(
+        name="ablation",
+        command=ExperimentCommand.argv(("python", "train.py", "--seed={SEED}")),
+        source_path=source,
+        output_root=tmp_path / "reports",
+        directory_source_mode="directory-snapshot",
+    )
+
+    experiments = plan_matrix(MatrixPlanRequest(template=template, parameters={"SEED": [1, 2]}))
+    shutil.rmtree(source)
+
+    assert len(experiments) == _SEED_COMBINATION_COUNT
+    for experiment in experiments:
+        assert (experiment / "source" / "train.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+        assert (experiment / "source" / "nested" / "config.json").read_text(encoding="utf-8") == "{}"
+    assert experiments[0].parent.name == "snapshot"
+    assert len({experiment.name for experiment in experiments}) == _SEED_COMBINATION_COUNT
+
+
+def test_matrix_planner_directory_snapshot_cleans_up_staging_after_publishing_all_combinations(tmp_path):
     source = _verified_directory_source(tmp_path)
     template = PlanRequest(
         name="ablation",
         command=ExperimentCommand.argv(("python", "train.py")),
         source_path=source,
         output_root=tmp_path / "reports",
+        directory_source_mode="directory-snapshot",
+    )
+
+    plan_matrix(MatrixPlanRequest(template=template, parameters={"SEED": [1, 2, 3]}))
+
+    leftovers = list(Path(tempfile.gettempdir()).glob("runforge-snapshot-*"))
+    assert not leftovers
+
+
+def test_matrix_planner_rejects_verified_directory_output_root_at_or_below_source(tmp_path):
+    source = _verified_directory_source(tmp_path)
+    template = PlanRequest(
+        name="ablation",
+        command=ExperimentCommand.argv(("python", "train.py")),
+        source_path=source,
+        output_root=source,
         directory_source_mode="verified-directory",
     )
 
-    with pytest.raises(PlanningError, match="does not yet support directory_source_mode"):
-        MatrixPlanRequest(template=template, parameters={"seed": [1, 2]})
+    with pytest.raises(PlanningError, match="outside the source directory"):
+        plan_matrix(MatrixPlanRequest(template=template, parameters={"SEED": [1, 2]}))
 
 
 def test_planner_publishes_directory_snapshot_plan_with_captured_bytes(tmp_path):
