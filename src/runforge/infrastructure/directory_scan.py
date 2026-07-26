@@ -67,6 +67,55 @@ def scan_directory(root: Path) -> DirectoryScanResult:
     return DirectoryScanResult(root=resolved_root, files=files, tree_digest=_tree_digest(files))
 
 
+def capture_directory(source: Path, destination: Path) -> DirectoryScanResult:
+    """Copy *source* into a fresh, non-existent *destination* while scanning it.
+
+    The same ignore and safety rules as :func:`scan_directory` apply. Every
+    regular file is copied byte-for-byte into *destination*, preserving its
+    executable bit, while its content digest is computed in the same pass.
+    """
+    resolved_root = Path(source).expanduser()
+    if resolved_root.is_symlink() or not resolved_root.is_dir():
+        raise DirectoryScanError(f"Source directory does not exist or is not a directory: {resolved_root}")
+    resolved_root = resolved_root.resolve()
+    resolved_destination = Path(destination).expanduser()
+    if resolved_destination.exists() or resolved_destination.is_symlink():
+        raise DirectoryScanError(f"Capture destination already exists: {resolved_destination}")
+    patterns = _load_ignore_patterns(resolved_root)
+    paths: list[Path] = []
+    _walk_directory(resolved_root, resolved_root, patterns, paths)
+    resolved_destination.mkdir(parents=True)
+    files = tuple(
+        sorted(
+            (_capture_file(resolved_root, resolved_destination, path) for path in paths),
+            key=lambda entry: entry.path,
+        )
+    )
+    return DirectoryScanResult(root=resolved_root, files=files, tree_digest=_tree_digest(files))
+
+
+def _capture_file(root: Path, destination_root: Path, path: Path) -> ScannedFile:
+    relative = path.relative_to(root).as_posix()
+    try:
+        mode = path.stat(follow_symlinks=False).st_mode
+    except OSError as error:
+        raise DirectoryScanError(f"Could not stat source file {relative}: {error}") from error
+    destination = destination_root / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as source_stream, destination.open("wb") as destination_stream:
+            for chunk in iter(lambda: source_stream.read(_HASH_CHUNK_SIZE), b""):
+                digest.update(chunk)
+                destination_stream.write(chunk)
+    except OSError as error:
+        raise DirectoryScanError(f"Could not copy source file {relative}: {error}") from error
+    executable = bool(stat.S_IMODE(mode) & 0o111)
+    if executable:
+        destination.chmod(destination.stat().st_mode | 0o111)
+    return ScannedFile(path=relative, executable=executable, sha256=digest.hexdigest())
+
+
 def _walk_directory(root: Path, current: Path, patterns: tuple[str, ...], files: list[Path]) -> None:
     try:
         entries = sorted(os.scandir(current), key=lambda entry: entry.name)

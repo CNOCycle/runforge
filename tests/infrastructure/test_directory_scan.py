@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from runforge.infrastructure.directory_scan import DirectoryScanError, scan_directory
+from runforge.infrastructure.directory_scan import DirectoryScanError, capture_directory, scan_directory
 
 
 _SHA256_HEX_LENGTH = 64
@@ -160,3 +160,60 @@ def test_scan_directory_digest_changes_when_content_changes(tmp_path):
     after = scan_directory(root).tree_digest
 
     assert before != after
+
+
+def test_capture_directory_copies_content_and_preserves_executable_bit(tmp_path):
+    root = tmp_path / "source"
+    _write(root / "nested" / "data.txt", "value\n")
+    _write(root / "run.sh", "#!/bin/sh\necho hi\n", executable=True)
+    destination = tmp_path / "capture"
+
+    result = capture_directory(root, destination)
+
+    assert (destination / "nested" / "data.txt").read_text(encoding="utf-8") == "value\n"
+    assert (destination / "run.sh").read_text(encoding="utf-8") == "#!/bin/sh\necho hi\n"
+    assert (destination / "run.sh").stat().st_mode & 0o111
+    assert not (destination / "nested" / "data.txt").stat().st_mode & 0o111
+    assert [entry.path for entry in result.files] == ["nested/data.txt", "run.sh"]
+    assert result.root == root.resolve()
+
+
+def test_capture_directory_matches_scan_directory_identity(tmp_path):
+    root = tmp_path / "source"
+    _write(root / "a.txt", "a\n")
+    _write(root / "b" / "c.txt", "c\n")
+    destination = tmp_path / "capture"
+
+    scanned = scan_directory(root)
+    captured = capture_directory(root, destination)
+
+    assert captured.tree_digest == scanned.tree_digest
+    assert captured.files == scanned.files
+
+
+def test_capture_directory_rejects_existing_destination(tmp_path):
+    root = tmp_path / "source"
+    _write(root / "a.txt", "a\n")
+    destination = tmp_path / "capture"
+    destination.mkdir()
+
+    with pytest.raises(DirectoryScanError, match="already exists"):
+        capture_directory(root, destination)
+
+
+def test_capture_directory_applies_ignore_rules_and_rejects_special_files(tmp_path):
+    root = tmp_path / "source"
+    _write(root / ".git" / "HEAD", "ref: refs/heads/main\n")
+    _write(root / "keep.txt", "keep\n")
+    destination = tmp_path / "capture"
+
+    result = capture_directory(root, destination)
+
+    assert [entry.path for entry in result.files] == ["keep.txt"]
+    assert not (destination / ".git").exists()
+
+    other_root = tmp_path / "special-source"
+    other_root.mkdir()
+    (other_root / "link.txt").symlink_to(tmp_path / "missing")
+    with pytest.raises(DirectoryScanError, match="symbolic link"):
+        capture_directory(other_root, tmp_path / "other-capture")

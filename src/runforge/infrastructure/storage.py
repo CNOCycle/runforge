@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from runforge.infrastructure.json_store import load_json_object, save_json_object
-from runforge.schemas.directory_source import DIRECTORY_SOURCE_MANIFEST_FILE, DirectorySourceManifest
+from runforge.schemas.directory_source import (
+    DIRECTORY_SNAPSHOT_DIRECTORY,
+    DIRECTORY_SOURCE_MANIFEST_FILE,
+    DirectorySourceManifest,
+)
 from runforge.schemas.experiment import ExperimentConfiguration, ExperimentStatus
 from runforge.schemas.inputs import (
     INPUT_MANIFEST_FILE,
@@ -73,6 +77,11 @@ class ExperimentDirectory:
     def directory_source_manifest_file(self) -> Path:
         """Return the immutable non-Git source manifest path."""
         return self.root / DIRECTORY_SOURCE_MANIFEST_FILE
+
+    @property
+    def snapshot_source_directory(self) -> Path:
+        """Return the immutable captured directory-snapshot source path."""
+        return self.root / DIRECTORY_SNAPSHOT_DIRECTORY
 
     @property
     def stdout_log(self) -> Path:

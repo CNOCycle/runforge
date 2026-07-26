@@ -16,6 +16,7 @@ from runforge.infrastructure.clock import utc_now
 from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.planning.directory_source import (
     DirectorySourceResolutionError,
+    resolve_directory_snapshot_source,
     resolve_verified_directory_source,
 )
 from runforge.planning.inputs import InputRenderingError, InputTemplate, RenderedInput, render_input_templates
@@ -26,7 +27,7 @@ from runforge.planning.source import (
     resolve_current_git_source,
     resolve_pinned_git_source,
 )
-from runforge.schemas.directory_source import DirectorySourceManifest, VerifiedDirectorySource
+from runforge.schemas.directory_source import DirectorySnapshotSource, DirectorySourceManifest, VerifiedDirectorySource
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.schemas.inputs import PlannedInput, PlannedInputManifest
 from runforge.schemas.source import GitSource, PinnedGitSource
@@ -35,8 +36,8 @@ from runforge.schemas.source import GitSource, PinnedGitSource
 _SLUG_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 _COMMIT_PREFIX_LENGTH = 8
 _DEFAULT_OUTPUT_ROOT = Path("reports")
-_DIRECTORY_SOURCE_MODES = frozenset({"verified-directory"})
-_DIRECTORY_SOURCE_BANDS = {"verified-directory": "verified"}
+_DIRECTORY_SOURCE_MODES = frozenset({"verified-directory", "directory-snapshot"})
+_DIRECTORY_SOURCE_BANDS = {"verified-directory": "verified", "directory-snapshot": "snapshot"}
 
 
 class PlanningError(RuntimeError):
@@ -124,6 +125,8 @@ def plan_experiment(request: PlanRequest) -> Path:
     """Create one self-contained Git-backed or non-Git experiment plan."""
     if request.directory_source_mode == "verified-directory":
         return _plan_verified_directory_experiment(request)
+    if request.directory_source_mode == "directory-snapshot":
+        return _plan_directory_snapshot_experiment(request)
     return _plan_resolved_experiment(request, _resolve_source(request))
 
 
@@ -175,6 +178,27 @@ def _plan_verified_directory_experiment(request: PlanRequest) -> Path:
     return destination
 
 
+def _plan_directory_snapshot_experiment(request: PlanRequest) -> Path:
+    """Capture and publish one self-contained directory-snapshot plan."""
+    try:
+        resolved = resolve_directory_snapshot_source(request.source_path)
+    except DirectorySourceResolutionError as error:
+        raise PlanningError(str(error)) from error
+    try:
+        source = resolved.source
+        if request.output_root is None:
+            raise PlanningError("output_root is required for directory-snapshot plans")
+        output_root = request.output_root.expanduser().resolve()
+        _require_output_root_outside_source(output_root, source.original_path)
+        band = _DIRECTORY_SOURCE_BANDS[request.directory_source_mode]
+        destination = _destination(output_root, band, source.tree_digest, request.name)
+        prepared = _prepare_experiment(request, source, destination, {}, utc_now())
+        _publish(prepared, directory_manifest=resolved.manifest, captured_source=resolved.captured_source)
+        return destination
+    finally:
+        shutil.rmtree(resolved.staging_root, ignore_errors=True)
+
+
 def _require_output_root_outside_source(output_root: Path, source_path: Path) -> None:
     if output_root == source_path or source_path in output_root.parents:
         raise PlanningError("output_root must resolve outside the source directory")
@@ -206,7 +230,7 @@ def _plan_resolved_matrix(request: MatrixPlanRequest, resolved: ResolvedGitSourc
 
 def _prepare_experiment(
     request: PlanRequest,
-    source: GitSource | VerifiedDirectorySource,
+    source: GitSource | VerifiedDirectorySource | DirectorySnapshotSource,
     destination: Path,
     parameters: Mapping[str, JsonScalar],
     timestamp: str,
@@ -269,6 +293,7 @@ def _publish(
     *,
     patch: bytes | None = None,
     directory_manifest: DirectorySourceManifest | None = None,
+    captured_source: Path | None = None,
 ) -> None:
     destination = prepared.destination
     temporary = destination.parent / f".{destination.name}.tmp-{uuid.uuid4().hex}"
@@ -285,6 +310,8 @@ def _publish(
             layout.git_patch_file.write_bytes(patch)
         if directory_manifest is not None:
             layout.save_directory_source_manifest(directory_manifest)
+        if captured_source is not None:
+            shutil.move(str(captured_source), str(layout.snapshot_source_directory))
         os.replace(temporary, destination)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -372,7 +374,7 @@ def test_plan_request_rejects_unsupported_directory_source_mode(tmp_path):
             name="ablation",
             command=ExperimentCommand.argv(("python", "train.py")),
             output_root=tmp_path / "reports",
-            directory_source_mode="directory-snapshot",
+            directory_source_mode="bogus-mode",
         )
 
 
@@ -399,3 +401,99 @@ def test_matrix_plan_request_rejects_directory_source_mode(tmp_path):
 
     with pytest.raises(PlanningError, match="does not yet support directory_source_mode"):
         MatrixPlanRequest(template=template, parameters={"seed": [1, 2]})
+
+
+def test_planner_publishes_directory_snapshot_plan_with_captured_bytes(tmp_path):
+    source = _verified_directory_source(tmp_path)
+    request = PlanRequest(
+        name="ablation",
+        command=ExperimentCommand.argv(("python", "train.py", "--out={ARTIFACT_DIR}")),
+        source_path=source,
+        output_root=tmp_path / "reports",
+        directory_source_mode="directory-snapshot",
+    )
+
+    experiment = plan_experiment(request)
+
+    configuration = ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json"))
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    manifest = load_json_object(experiment / "source-manifest.json")
+    assert configuration.source.to_dict()["kind"] == "runforge_directory_snapshot_source"
+    assert configuration.source.original_path == source.resolve()
+    assert status.state == "created"
+    assert [entry["path"] for entry in manifest["entries"]] == ["nested/config.json", "train.py"]
+    assert manifest["tree_digest"] == configuration.source.tree_digest
+    assert (experiment / "source" / "train.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+    assert (experiment / "source" / "nested" / "config.json").read_text(encoding="utf-8") == "{}"
+    assert not (experiment / "git.patch").exists()
+    assert experiment.parent.name == "snapshot"
+    assert experiment.name.startswith(configuration.source.tree_digest[:8] + "_ablation_")
+
+
+def test_planner_directory_snapshot_plan_survives_source_mutation_and_deletion(tmp_path):
+    source = _verified_directory_source(tmp_path)
+    experiment = plan_experiment(
+        PlanRequest(
+            name="ablation",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="directory-snapshot",
+        )
+    )
+
+    shutil.rmtree(source)
+
+    assert (experiment / "source" / "train.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+
+
+def test_planner_rejects_directory_snapshot_output_root_at_or_below_source(tmp_path):
+    source = _verified_directory_source(tmp_path)
+
+    with pytest.raises(PlanningError, match="outside the source directory"):
+        plan_experiment(
+            PlanRequest(
+                name="ablation",
+                command=ExperimentCommand.argv(("python", "train.py")),
+                source_path=source,
+                output_root=source,
+                directory_source_mode="directory-snapshot",
+            )
+        )
+
+
+def test_planner_requires_output_root_for_directory_snapshot_mode(tmp_path):
+    source = _verified_directory_source(tmp_path)
+
+    with pytest.raises(PlanningError, match="output_root is required"):
+        PlanRequest(
+            name="ablation",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            directory_source_mode="directory-snapshot",
+        )
+
+
+def test_planner_cleans_up_staging_when_directory_snapshot_publication_fails(tmp_path, monkeypatch):
+    source = _verified_directory_source(tmp_path)
+    output_root = tmp_path / "reports"
+
+    def _boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(planner_module, "_prepare_experiment", _boom)
+
+    with pytest.raises(OSError, match="disk full"):
+        plan_experiment(
+            PlanRequest(
+                name="ablation",
+                command=ExperimentCommand.argv(("python", "train.py")),
+                source_path=source,
+                output_root=output_root,
+                directory_source_mode="directory-snapshot",
+            )
+        )
+
+    leftovers = list(Path(tempfile.gettempdir()).glob("runforge-snapshot-*"))
+    assert not leftovers
+    assert list((output_root / "snapshot").iterdir()) == []
