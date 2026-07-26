@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from runforge.infrastructure.json_store import load_json_object, save_json_object
+from runforge.schemas.directory_source import DIRECTORY_SOURCE_MANIFEST_FILE, DirectorySourceManifest
 from runforge.schemas.experiment import ExperimentConfiguration, ExperimentStatus
 from runforge.schemas.inputs import (
     INPUT_MANIFEST_FILE,
@@ -69,6 +70,11 @@ class ExperimentDirectory:
         return self.root / INPUT_MANIFEST_FILE
 
     @property
+    def directory_source_manifest_file(self) -> Path:
+        """Return the immutable non-Git source manifest path."""
+        return self.root / DIRECTORY_SOURCE_MANIFEST_FILE
+
+    @property
     def stdout_log(self) -> Path:
         return self.root / STDOUT_LOG_FILE
 
@@ -96,6 +102,10 @@ class ExperimentDirectory:
         """Load and validate immutable planned-input metadata."""
         return PlannedInputManifest.from_dict(load_json_object(self.input_manifest_file))
 
+    def load_directory_source_manifest(self) -> DirectorySourceManifest:
+        """Load and validate the immutable non-Git source manifest."""
+        return DirectorySourceManifest.from_dict(load_json_object(self.directory_source_manifest_file))
+
     def load_metadata(self) -> tuple[ExperimentConfiguration, ExperimentStatus]:
         """Load the immutable configuration and mutable status together."""
         return self.load_configuration(), self.load_status()
@@ -112,3 +122,7 @@ class ExperimentDirectory:
     def save_input_manifest(self, manifest: PlannedInputManifest) -> None:
         """Persist immutable planned-input metadata atomically."""
         save_json_object(self.input_manifest_file, manifest.to_dict())
+
+    def save_directory_source_manifest(self, manifest: DirectorySourceManifest) -> None:
+        """Persist the immutable non-Git source manifest atomically."""
+        save_json_object(self.directory_source_manifest_file, manifest.to_dict())

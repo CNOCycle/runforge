@@ -14,6 +14,10 @@ from pathlib import Path
 
 from runforge.infrastructure.clock import utc_now
 from runforge.infrastructure.storage import ExperimentDirectory
+from runforge.planning.directory_source import (
+    DirectorySourceResolutionError,
+    resolve_verified_directory_source,
+)
 from runforge.planning.inputs import InputRenderingError, InputTemplate, RenderedInput, render_input_templates
 from runforge.planning.matrix import JsonScalar, MatrixError, expand_matrix, parameter_text
 from runforge.planning.source import (
@@ -22,14 +26,17 @@ from runforge.planning.source import (
     resolve_current_git_source,
     resolve_pinned_git_source,
 )
+from runforge.schemas.directory_source import DirectorySourceManifest, VerifiedDirectorySource
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.schemas.inputs import PlannedInput, PlannedInputManifest
-from runforge.schemas.source import PinnedGitSource
+from runforge.schemas.source import GitSource, PinnedGitSource
 
 
 _SLUG_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 _COMMIT_PREFIX_LENGTH = 8
 _DEFAULT_OUTPUT_ROOT = Path("reports")
+_DIRECTORY_SOURCE_MODES = frozenset({"verified-directory"})
+_DIRECTORY_SOURCE_BANDS = {"verified-directory": "verified"}
 
 
 class PlanningError(RuntimeError):
@@ -45,6 +52,7 @@ class PlanRequest:
     output_root: Path | None = None
     source_path: Path = Path(".")
     source: PinnedGitSource | None = None
+    directory_source_mode: str | None = None
     environment: Mapping[str, str] = field(default_factory=dict)
     inputs: Sequence[InputTemplate] = ()
 
@@ -59,6 +67,7 @@ class PlanRequest:
             object.__setattr__(self, "source_path", Path(self.source_path))
         if self.source is not None and not isinstance(self.source, PinnedGitSource):
             raise PlanningError("source must be PinnedGitSource metadata")
+        self._validate_directory_source_mode()
         environment = dict(self.environment)
         if not all(isinstance(key, str) and key and isinstance(value, str) for key, value in environment.items()):
             raise PlanningError("environment must map non-empty strings to strings")
@@ -69,6 +78,17 @@ class PlanRequest:
         if not all(isinstance(entry, InputTemplate) for entry in inputs):
             raise PlanningError("inputs must be an array of InputTemplate metadata")
         object.__setattr__(self, "inputs", inputs)
+
+    def _validate_directory_source_mode(self) -> None:
+        if self.directory_source_mode is None:
+            return
+        if self.directory_source_mode not in _DIRECTORY_SOURCE_MODES:
+            choices = ", ".join(sorted(_DIRECTORY_SOURCE_MODES))
+            raise PlanningError(f"directory_source_mode must be one of: {choices}")
+        if self.source is not None:
+            raise PlanningError("directory_source_mode and a pinned Git source are mutually exclusive")
+        if self.output_root is None:
+            raise PlanningError(f"output_root is required when directory_source_mode is {self.directory_source_mode!r}")
 
 
 @dataclass(frozen=True)
@@ -82,6 +102,8 @@ class MatrixPlanRequest:
     def __post_init__(self) -> None:
         if not isinstance(self.template, PlanRequest):
             raise PlanningError("template must be PlanRequest metadata")
+        if self.template.directory_source_mode is not None:
+            raise PlanningError("Matrix planning does not yet support directory_source_mode")
         try:
             combinations = expand_matrix(self.parameters)
         except MatrixError as error:
@@ -99,7 +121,9 @@ class _PreparedExperiment:
 
 
 def plan_experiment(request: PlanRequest) -> Path:
-    """Create one self-contained current-HEAD or pinned experiment plan."""
+    """Create one self-contained Git-backed or non-Git experiment plan."""
+    if request.directory_source_mode == "verified-directory":
+        return _plan_verified_directory_experiment(request)
     return _plan_resolved_experiment(request, _resolve_source(request))
 
 
@@ -127,10 +151,33 @@ def _plan_resolved_experiment(request: PlanRequest, resolved: ResolvedGitSource)
     source = resolved.source
     output_root = request.output_root or resolved.repository.root / _DEFAULT_OUTPUT_ROOT
     destination = _destination(output_root, source.branch, source.commit, request.name)
-    prepared = _prepare_experiment(request, resolved, destination, {}, utc_now())
-    _publish(prepared.destination, prepared.configuration, prepared.status, resolved.patch, prepared.inputs)
+    prepared = _prepare_experiment(request, source, destination, {}, utc_now())
+    _publish(prepared, patch=resolved.patch)
     _warn_untracked(source.untracked_files)
     return destination
+
+
+def _plan_verified_directory_experiment(request: PlanRequest) -> Path:
+    """Publish one self-contained verified-directory plan without copying source bytes."""
+    try:
+        resolved = resolve_verified_directory_source(request.source_path)
+    except DirectorySourceResolutionError as error:
+        raise PlanningError(str(error)) from error
+    source = resolved.source
+    if request.output_root is None:
+        raise PlanningError("output_root is required for verified-directory plans")
+    output_root = request.output_root.expanduser().resolve()
+    _require_output_root_outside_source(output_root, source.path)
+    band = _DIRECTORY_SOURCE_BANDS[request.directory_source_mode]
+    destination = _destination(output_root, band, source.tree_digest, request.name)
+    prepared = _prepare_experiment(request, source, destination, {}, utc_now())
+    _publish(prepared, directory_manifest=resolved.manifest)
+    return destination
+
+
+def _require_output_root_outside_source(output_root: Path, source_path: Path) -> None:
+    if output_root == source_path or source_path in output_root.parents:
+        raise PlanningError("output_root must resolve outside the source directory")
 
 
 def _plan_resolved_matrix(request: MatrixPlanRequest, resolved: ResolvedGitSource) -> tuple[Path, ...]:
@@ -144,13 +191,11 @@ def _plan_resolved_matrix(request: MatrixPlanRequest, resolved: ResolvedGitSourc
     for parameters in request.combinations:
         destination = _destination(output_root, source.branch, source.commit, template.name, reserved=reserved)
         reserved.add(destination)
-        prepared.append(_prepare_experiment(template, resolved, destination, parameters, timestamp))
+        prepared.append(_prepare_experiment(template, source, destination, parameters, timestamp))
     created: list[Path] = []
     try:
         for experiment in prepared:
-            _publish(
-                experiment.destination, experiment.configuration, experiment.status, resolved.patch, experiment.inputs
-            )
+            _publish(experiment, patch=resolved.patch)
             created.append(experiment.destination)
     except Exception:
         for destination in created:
@@ -161,7 +206,7 @@ def _plan_resolved_matrix(request: MatrixPlanRequest, resolved: ResolvedGitSourc
 
 def _prepare_experiment(
     request: PlanRequest,
-    resolved: ResolvedGitSource,
+    source: GitSource | VerifiedDirectorySource,
     destination: Path,
     parameters: Mapping[str, JsonScalar],
     timestamp: str,
@@ -184,7 +229,7 @@ def _prepare_experiment(
         name=request.name,
         command=rendered_command,
         environment=request.environment,
-        source=resolved.source,
+        source=source,
         created_at=timestamp,
         parameters=parameters,
     )
@@ -194,14 +239,14 @@ def _prepare_experiment(
 
 def _destination(
     output_root: Path,
-    branch: str,
-    commit: str,
+    band: str,
+    identity: str,
     name: str,
     reserved: set[Path] | None = None,
 ) -> Path:
-    parent = output_root.expanduser().resolve() / _slug(branch, "detached")
+    parent = output_root.expanduser().resolve() / _slug(band, "band")
     parent.mkdir(parents=True, exist_ok=True)
-    prefix = f"{commit[:_COMMIT_PREFIX_LENGTH]}_{_slug(name, 'experiment')}"
+    prefix = f"{identity[:_COMMIT_PREFIX_LENGTH]}_{_slug(name, 'experiment')}"
     index = 0
     while True:
         destination = parent / f"{prefix}_{index:04d}"
@@ -220,24 +265,26 @@ def _warn_untracked(untracked_files: Sequence[str]) -> None:
 
 
 def _publish(
-    destination: Path,
-    configuration: ExperimentConfiguration,
-    status: ExperimentStatus,
-    patch: bytes,
-    inputs: Sequence[RenderedInput],
+    prepared: _PreparedExperiment,
+    *,
+    patch: bytes | None = None,
+    directory_manifest: DirectorySourceManifest | None = None,
 ) -> None:
+    destination = prepared.destination
     temporary = destination.parent / f".{destination.name}.tmp-{uuid.uuid4().hex}"
     temporary.mkdir()
     layout = ExperimentDirectory(temporary)
     try:
-        layout.save_configuration(configuration)
-        layout.save_status(status)
+        layout.save_configuration(prepared.configuration)
+        layout.save_status(prepared.status)
         layout.artifacts.mkdir()
-        if inputs:
-            _publish_inputs(layout, inputs)
-        _write_command_file(layout.command_file, configuration.command)
+        if prepared.inputs:
+            _publish_inputs(layout, prepared.inputs)
+        _write_command_file(layout.command_file, prepared.configuration.command)
         if patch:
             layout.git_patch_file.write_bytes(patch)
+        if directory_manifest is not None:
+            layout.save_directory_source_manifest(directory_manifest)
         os.replace(temporary, destination)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)

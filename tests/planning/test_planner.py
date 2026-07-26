@@ -292,3 +292,110 @@ def test_planner_reports_invalid_non_git_source_path(tmp_path):
 
     with pytest.raises(PlanningError, match="find Git repository"):
         plan_experiment(request)
+
+
+def _verified_directory_source(tmp_path: Path) -> Path:
+    source = tmp_path / "source"
+    (source / "nested").mkdir(parents=True)
+    (source / "train.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (source / "nested" / "config.json").write_text("{}", encoding="utf-8")
+    return source
+
+
+def test_planner_publishes_verified_directory_plan_with_manifest_and_no_patch(tmp_path):
+    source = _verified_directory_source(tmp_path)
+    request = PlanRequest(
+        name="ablation",
+        command=ExperimentCommand.argv(("python", "train.py", "--out={ARTIFACT_DIR}")),
+        source_path=source,
+        output_root=tmp_path / "reports",
+        directory_source_mode="verified-directory",
+    )
+
+    experiment = plan_experiment(request)
+
+    configuration = ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json"))
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    manifest = load_json_object(experiment / "source-manifest.json")
+    assert configuration.source.to_dict()["kind"] == "runforge_verified_directory_source"
+    assert configuration.source.path == source.resolve()
+    assert status.state == "created"
+    assert [entry["path"] for entry in manifest["entries"]] == ["nested/config.json", "train.py"]
+    assert manifest["tree_digest"] == configuration.source.tree_digest
+    assert not (experiment / "git.patch").exists()
+    assert not (experiment / "source").exists()
+    assert experiment.parent.name == "verified"
+    assert experiment.name.startswith(configuration.source.tree_digest[:8] + "_ablation_")
+
+
+def test_planner_rejects_verified_directory_output_root_at_or_below_source(tmp_path):
+    source = _verified_directory_source(tmp_path)
+
+    with pytest.raises(PlanningError, match="outside the source directory"):
+        plan_experiment(
+            PlanRequest(
+                name="ablation",
+                command=ExperimentCommand.argv(("python", "train.py")),
+                source_path=source,
+                output_root=source,
+                directory_source_mode="verified-directory",
+            )
+        )
+
+    with pytest.raises(PlanningError, match="outside the source directory"):
+        plan_experiment(
+            PlanRequest(
+                name="ablation",
+                command=ExperimentCommand.argv(("python", "train.py")),
+                source_path=source,
+                output_root=source / "nested",
+                directory_source_mode="verified-directory",
+            )
+        )
+
+
+def test_planner_requires_output_root_for_verified_directory_mode(tmp_path):
+    source = _verified_directory_source(tmp_path)
+
+    with pytest.raises(PlanningError, match="output_root is required"):
+        PlanRequest(
+            name="ablation",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            directory_source_mode="verified-directory",
+        )
+
+
+def test_plan_request_rejects_unsupported_directory_source_mode(tmp_path):
+    with pytest.raises(PlanningError, match="directory_source_mode must be one of"):
+        PlanRequest(
+            name="ablation",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            output_root=tmp_path / "reports",
+            directory_source_mode="directory-snapshot",
+        )
+
+
+def test_plan_request_rejects_directory_source_mode_with_pinned_git_source(tmp_path):
+    with pytest.raises(PlanningError, match="mutually exclusive"):
+        PlanRequest(
+            name="ablation",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            output_root=tmp_path / "reports",
+            source=PinnedGitSource(repository=tmp_path, commit="main"),
+            directory_source_mode="verified-directory",
+        )
+
+
+def test_matrix_plan_request_rejects_directory_source_mode(tmp_path):
+    source = _verified_directory_source(tmp_path)
+    template = PlanRequest(
+        name="ablation",
+        command=ExperimentCommand.argv(("python", "train.py")),
+        source_path=source,
+        output_root=tmp_path / "reports",
+        directory_source_mode="verified-directory",
+    )
+
+    with pytest.raises(PlanningError, match="does not yet support directory_source_mode"):
+        MatrixPlanRequest(template=template, parameters={"seed": [1, 2]})
