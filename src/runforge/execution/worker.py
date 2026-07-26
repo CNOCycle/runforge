@@ -14,13 +14,23 @@ from pathlib import Path
 from typing import BinaryIO, Literal, TextIO
 
 from runforge.infrastructure.clock import utc_now
+from runforge.infrastructure.directory_scan import DirectoryScanError, ScannedFile, scan_directory
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.infrastructure.storage import ExperimentDirectory
+from runforge.schemas.directory_source import DirectorySourceEntry, DirectorySourceManifest, VerifiedDirectorySource
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 
 
 class WorkerError(RuntimeError):
     """Raised when one planned experiment cannot be prepared or executed."""
+
+
+@dataclass(frozen=True)
+class _ExecutionOptions:
+    """Bundled streaming and progress-callback options for one execution."""
+
+    stream_output: bool
+    progress: Callable[[WorkerProgressEvent], None] | None
 
 
 @dataclass(frozen=True)
@@ -129,6 +139,22 @@ def _execute(
     stream_output: bool,
     progress: Callable[[WorkerProgressEvent], None] | None,
 ) -> int:
+    """Dispatch execution by the recorded source kind; no Git fallback for non-Git sources."""
+    if isinstance(configuration.source, VerifiedDirectorySource):
+        return _execute_verified_directory(
+            experiment, configuration, status, stream_output=stream_output, progress=progress
+        )
+    return _execute_git(experiment, configuration, status, stream_output=stream_output, progress=progress)
+
+
+def _execute_git(
+    experiment: ExperimentDirectory,
+    configuration: ExperimentConfiguration,
+    status: ExperimentStatus,
+    *,
+    stream_output: bool,
+    progress: Callable[[WorkerProgressEvent], None] | None,
+) -> int:
     try:
         repository = GitRepository.locate(configuration.source.repository)
     except GitOperationError as error:
@@ -145,38 +171,9 @@ def _execute(
                 configuration.source.patch_file,
                 configuration.source.patch_sha256,
             )
-            active_status = experiment.save_status(
-                replace(
-                    status,
-                    state="inprogress",
-                    attempt=status.attempt + 1,
-                    updated_at=utc_now(),
-                    started_at=utc_now(),
-                ),
+            return _run_in_working_directory(
+                experiment, configuration, status, worktree, _ExecutionOptions(stream_output, progress)
             )
-            _notify_progress(
-                progress,
-                _progress_event(
-                    "executing",
-                    experiment,
-                    stream_output,
-                    command=configuration.command,
-                ),
-            )
-            exit_code = _run_command(experiment, worktree, configuration, stream_output=stream_output)
-            final_state = "completed" if exit_code == 0 else "failed"
-            error = None if exit_code == 0 else f"Command exited with status {exit_code}"
-            experiment.save_status(
-                replace(
-                    active_status,
-                    state=final_state,
-                    updated_at=utc_now(),
-                    finished_at=utc_now(),
-                    exit_code=exit_code,
-                    error=error,
-                ),
-            )
-            return exit_code
         except GitOperationError as error:
             raise WorkerError(str(error)) from error
         finally:
@@ -185,6 +182,100 @@ def _execute(
                     repository.remove_worktree(worktree)
                 except GitOperationError as error:
                     raise WorkerError(f"Could not clean up worktree: {error}") from error
+
+
+def _execute_verified_directory(
+    experiment: ExperimentDirectory,
+    configuration: ExperimentConfiguration,
+    status: ExperimentStatus,
+    *,
+    stream_output: bool,
+    progress: Callable[[WorkerProgressEvent], None] | None,
+) -> int:
+    source = configuration.source
+    _verify_verified_directory_source(experiment, source)
+    return _run_in_working_directory(
+        experiment, configuration, status, source.path, _ExecutionOptions(stream_output, progress)
+    )
+
+
+def _run_in_working_directory(
+    experiment: ExperimentDirectory,
+    configuration: ExperimentConfiguration,
+    status: ExperimentStatus,
+    working_directory: Path,
+    options: _ExecutionOptions,
+) -> int:
+    """Transition to inprogress, run the recorded command, and record the final status."""
+    active_status = experiment.save_status(
+        replace(status, state="inprogress", attempt=status.attempt + 1, updated_at=utc_now(), started_at=utc_now()),
+    )
+    _notify_progress(
+        options.progress,
+        _progress_event("executing", experiment, options.stream_output, command=configuration.command),
+    )
+    exit_code = _run_command(experiment, working_directory, configuration, stream_output=options.stream_output)
+    final_state = "completed" if exit_code == 0 else "failed"
+    error = None if exit_code == 0 else f"Command exited with status {exit_code}"
+    experiment.save_status(
+        replace(
+            active_status,
+            state=final_state,
+            updated_at=utc_now(),
+            finished_at=utc_now(),
+            exit_code=exit_code,
+            error=error,
+        ),
+    )
+    return exit_code
+
+
+def _verify_verified_directory_source(experiment: ExperimentDirectory, source: VerifiedDirectorySource) -> None:
+    """Reject a missing, moved, or changed verified-directory source before execution."""
+    if source.path.is_symlink() or not source.path.is_dir():
+        raise WorkerError(f"Verified-directory source is missing or not a directory: {source.path}")
+    manifest = _load_verified_source_manifest(experiment, source)
+    try:
+        scan = scan_directory(source.path)
+    except DirectoryScanError as error:
+        raise WorkerError(str(error)) from error
+    expected = {entry.path: entry for entry in manifest.entries}
+    actual = {entry.path: entry for entry in scan.files}
+    _require_matching_source_paths(expected, actual)
+    _require_matching_source_entries(expected, actual)
+    if scan.tree_digest != source.tree_digest:
+        raise WorkerError("Verified-directory source has changed since planning")
+
+
+def _load_verified_source_manifest(
+    experiment: ExperimentDirectory, source: VerifiedDirectorySource
+) -> DirectorySourceManifest:
+    try:
+        manifest = experiment.load_directory_source_manifest()
+    except ValueError as error:
+        raise WorkerError(str(error)) from error
+    if manifest.tree_digest != source.tree_digest:
+        raise WorkerError("Recorded source manifest digest does not match configuration")
+    return manifest
+
+
+def _require_matching_source_paths(expected: dict[str, object], actual: dict[str, object]) -> None:
+    """Require the manifest's exact file set before comparing checksums."""
+    missing = sorted(set(expected) - set(actual))
+    unexpected = sorted(set(actual) - set(expected))
+    if missing:
+        raise WorkerError(f"Verified-directory source file is missing: {missing[0]}")
+    if unexpected:
+        raise WorkerError(f"Unexpected verified-directory source file: {unexpected[0]}")
+
+
+def _require_matching_source_entries(expected: dict[str, DirectorySourceEntry], actual: dict[str, ScannedFile]) -> None:
+    for path, expected_entry in expected.items():
+        actual_entry = actual[path]
+        if actual_entry.sha256 != expected_entry.sha256:
+            raise WorkerError(f"Verified-directory source file checksum does not match manifest: {path}")
+        if actual_entry.executable != expected_entry.executable:
+            raise WorkerError(f"Verified-directory source file executable bit does not match manifest: {path}")
 
 
 def _apply_recorded_patch(
@@ -268,7 +359,7 @@ def _require_matching_input_paths(expected: dict[str, object], actual: set[str])
 
 def _run_command(
     experiment: ExperimentDirectory,
-    worktree: Path,
+    working_directory: Path,
     configuration: ExperimentConfiguration,
     *,
     stream_output: bool,
@@ -277,7 +368,7 @@ def _run_command(
     environment.update(configuration.environment)
     environment["RUNFORGE_ARTIFACT_DIR"] = str(experiment.artifacts)
     environment["RUNFORGE_INPUT_DIR"] = str(experiment.inputs)
-    paths = [str(worktree / "src"), str(worktree)]
+    paths = [str(working_directory / "src"), str(working_directory)]
     if environment.get("PYTHONPATH"):
         paths.append(environment["PYTHONPATH"])
     environment["PYTHONPATH"] = os.pathsep.join(paths)
@@ -288,7 +379,7 @@ def _run_command(
                 process = subprocess.Popen(
                     command,
                     shell=configuration.command.mode == "shell",
-                    cwd=worktree,
+                    cwd=working_directory,
                     env=environment,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -298,7 +389,7 @@ def _run_command(
                 exit_code = subprocess.run(
                     command,
                     shell=configuration.command.mode == "shell",
-                    cwd=worktree,
+                    cwd=working_directory,
                     env=environment,
                     stdout=stdout,
                     stderr=stderr,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,13 @@ FAILURE_EXIT_CODE = 7
 
 def _repository(tmp_path: Path, script: str) -> Path:
     return create_git_repository(tmp_path / "repository", {"train.py": script})
+
+
+def _verified_directory_source(tmp_path: Path, script: str) -> Path:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "train.py").write_text(script, encoding="utf-8")
+    return source
 
 
 def test_worker_executes_recorded_commit_and_patch_then_cleans_worktree(tmp_path):
@@ -253,3 +261,104 @@ def test_worker_reports_preparation_failure(tmp_path):
 
     assert [event.phase for event in events] == ["preparing", "failed"]
     assert events[-1].error == f"Experiment directory does not exist: {experiment}"
+
+
+def test_worker_executes_verified_directory_source_in_place_without_git(tmp_path):
+    source = _verified_directory_source(
+        tmp_path,
+        (
+            "from pathlib import Path\n"
+            "import os\n"
+            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
+            "artifact_dir.joinpath('result.txt').write_text('base')\n"
+            "artifact_dir.joinpath('cwd.txt').write_text(str(Path.cwd()))\n"
+        ),
+    )
+    experiment = plan_experiment(
+        PlanRequest(
+            name="verified",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="verified-directory",
+        )
+    )
+
+    assert run_experiment(experiment) == 0
+
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "base"
+    assert Path((experiment / "artifacts" / "cwd.txt").read_text(encoding="utf-8")) == source.resolve()
+    assert status.state == "completed"
+    assert status.attempt == 1
+    assert status.exit_code == 0
+    assert not (experiment / "git.patch").exists()
+
+
+def test_worker_rejects_missing_verified_directory_source(tmp_path):
+    source = _verified_directory_source(tmp_path, "print('should not run')\n")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="verified",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="verified-directory",
+        )
+    )
+    shutil.rmtree(source)
+
+    with pytest.raises(WorkerError, match="missing or not a directory"):
+        run_experiment(experiment)
+
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    assert status.state == "failed"
+    assert status.attempt == 0
+
+
+@pytest.mark.parametrize(
+    "mutation, match",
+    [
+        (lambda source: (source / "train.py").write_text("changed", encoding="utf-8"), "checksum"),
+        (lambda source: (source / "extra.txt").write_text("unexpected", encoding="utf-8"), "Unexpected"),
+        (lambda source: (source / "train.py").unlink(), "missing"),
+    ],
+)
+def test_worker_rejects_changed_verified_directory_source_before_execution(tmp_path, mutation, match):
+    source = _verified_directory_source(tmp_path, "raise SystemExit('must not execute')\n")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="verified",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="verified-directory",
+        )
+    )
+    mutation(source)
+
+    with pytest.raises(WorkerError, match=match):
+        run_experiment(experiment)
+
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    assert status.state == "failed"
+    assert status.attempt == 0
+
+
+def test_worker_records_verified_directory_command_failure(tmp_path):
+    source = _verified_directory_source(tmp_path, "raise SystemExit(7)\n")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="verified",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="verified-directory",
+        )
+    )
+
+    assert run_experiment(experiment) == FAILURE_EXIT_CODE
+
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    assert status.state == "failed"
+    assert status.error == "Command exited with status 7"
