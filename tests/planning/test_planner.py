@@ -132,8 +132,8 @@ def test_planner_allocates_distinct_experiment_directories_and_persists_shell_pi
     first_configuration = ExperimentConfiguration.from_dict(load_json_object(first / "config.json"))
     commit8 = git(repository, "rev-parse", "HEAD")[:8]
     assert first != second
-    assert first.name == f"{commit8}_pipeline_0"
-    assert second.name == f"{commit8}_pipeline_1"
+    assert first.name == f"{commit8}_pipeline_0000"
+    assert second.name == f"{commit8}_pipeline_0001"
     assert first_configuration.command.script is not None
     assert "{ARTIFACT_DIR}" not in first_configuration.command.script
     assert str(first / "artifacts") in first_configuration.command.script
@@ -214,7 +214,7 @@ def test_matrix_planner_resolves_source_once_and_publishes_deterministic_combina
 
     assert calls == 1
     assert tuple(configuration.parameters for configuration in configurations) == expected
-    assert [experiment.name.rsplit("_", 1)[-1] for experiment in experiments] == ["0", "1", "2", "3"]
+    assert [experiment.name.rsplit("_", 1)[-1] for experiment in experiments] == ["0000", "0001", "0002", "0003"]
     assert {configuration.source.commit for configuration in configurations} == {pinned_commit}
     for experiment, configuration, parameters in zip(experiments, configurations, expected, strict=True):
         assert configuration.command.arguments[-3] == f"--lr={parameters['LR']}"

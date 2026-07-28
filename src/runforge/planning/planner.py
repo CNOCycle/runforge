@@ -204,7 +204,7 @@ def _destination(
     prefix = f"{commit[:_COMMIT_PREFIX_LENGTH]}_{_slug(name, 'experiment')}"
     index = 0
     while True:
-        destination = parent / f"{prefix}_{index}"
+        destination = parent / f"{prefix}_{index:04d}"
         if not destination.exists() and (reserved is None or destination not in reserved):
             return destination
         index += 1
