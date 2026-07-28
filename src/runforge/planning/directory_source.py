@@ -37,7 +37,7 @@ def resolve_verified_directory_source(source_path: Path) -> ResolvedVerifiedDire
             f"Verified-directory source must be a non-symlink directory: {resolved_path}"
         )
     try:
-        scan = scan_directory(resolved_path)
+        scan = scan_directory(resolved_path, reject_ignored=True)
     except DirectoryScanError as error:
         raise DirectorySourceResolutionError(str(error)) from error
     manifest = _manifest_from_scan(scan.files, scan.tree_digest)

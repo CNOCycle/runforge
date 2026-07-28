@@ -48,7 +48,7 @@ class DirectoryScanResult:
     tree_digest: str
 
 
-def scan_directory(root: Path) -> DirectoryScanResult:
+def scan_directory(root: Path, *, ignore_file: bool = True, reject_ignored: bool = False) -> DirectoryScanResult:
     """Recursively scan *root* and hash its regular files deterministically.
 
     Every symlink, socket, device, FIFO, and other special file is rejected.
@@ -60,9 +60,12 @@ def scan_directory(root: Path) -> DirectoryScanResult:
     if resolved_root.is_symlink() or not resolved_root.is_dir():
         raise DirectoryScanError(f"Source directory does not exist or is not a directory: {resolved_root}")
     resolved_root = resolved_root.resolve()
-    patterns = _load_ignore_patterns(resolved_root)
+    patterns = _load_ignore_patterns(resolved_root) if ignore_file else ()
     paths: list[Path] = []
-    _walk_directory(resolved_root, resolved_root, patterns, paths)
+    ignored: list[str] = []
+    _walk_directory(resolved_root, resolved_root, patterns, paths, ignored)
+    if reject_ignored and ignored:
+        raise DirectoryScanError(f"Source directory contains files excluded by {IGNORE_FILE}: {ignored[0]}")
     files = tuple(sorted((_scan_file(resolved_root, path) for path in paths), key=lambda entry: entry.path))
     return DirectoryScanResult(root=resolved_root, files=files, tree_digest=_tree_digest(files))
 
@@ -83,7 +86,7 @@ def capture_directory(source: Path, destination: Path) -> DirectoryScanResult:
         raise DirectoryScanError(f"Capture destination already exists: {resolved_destination}")
     patterns = _load_ignore_patterns(resolved_root)
     paths: list[Path] = []
-    _walk_directory(resolved_root, resolved_root, patterns, paths)
+    _walk_directory(resolved_root, resolved_root, patterns, paths, [])
     resolved_destination.mkdir(parents=True)
     files = tuple(
         sorted(
@@ -116,7 +119,9 @@ def _capture_file(root: Path, destination_root: Path, path: Path) -> ScannedFile
     return ScannedFile(path=relative, executable=executable, sha256=digest.hexdigest())
 
 
-def _walk_directory(root: Path, current: Path, patterns: tuple[str, ...], files: list[Path]) -> None:
+def _walk_directory(
+    root: Path, current: Path, patterns: tuple[str, ...], files: list[Path], ignored: list[str]
+) -> None:
     try:
         entries = sorted(os.scandir(current), key=lambda entry: entry.name)
     except OSError as error:
@@ -125,11 +130,13 @@ def _walk_directory(root: Path, current: Path, patterns: tuple[str, ...], files:
         candidate = Path(entry.path)
         relative = candidate.relative_to(root).as_posix()
         if _is_ignored(relative, entry.name, patterns):
+            if entry.name != _ALWAYS_IGNORED_NAME:
+                ignored.append(relative)
             continue
         if entry.is_symlink():
             raise DirectoryScanError(f"Source directory contains a symbolic link: {relative}")
         if entry.is_dir(follow_symlinks=False):
-            _walk_directory(root, candidate, patterns, files)
+            _walk_directory(root, candidate, patterns, files, ignored)
         elif entry.is_file(follow_symlinks=False):
             files.append(candidate)
         else:

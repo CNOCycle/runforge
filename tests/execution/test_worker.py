@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import runforge.execution.worker as worker_module
 from runforge.execution.worker import WorkerError, WorkerProgressEvent, run_experiment
 from runforge.infrastructure.json_store import load_json_object
 from runforge.planning.inputs import InputTemplate
@@ -345,6 +346,27 @@ def test_worker_rejects_changed_verified_directory_source_before_execution(tmp_p
     assert status.attempt == 0
 
 
+def test_worker_records_attempt_when_command_cannot_start(tmp_path):
+    source = _verified_directory_source(tmp_path, 'print("must not execute")\n')
+    experiment = plan_experiment(
+        PlanRequest(
+            name="startup-failure",
+            command=ExperimentCommand.argv(("runforge-command-does-not-exist",)),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="verified-directory",
+        )
+    )
+
+    with pytest.raises(WorkerError, match="Could not start command"):
+        run_experiment(experiment)
+
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    assert status.state == "failed"
+    assert status.attempt == 1
+    assert status.started_at is not None
+
+
 def test_worker_records_verified_directory_command_failure(tmp_path):
     source = _verified_directory_source(tmp_path, "raise SystemExit(7)\n")
     experiment = plan_experiment(
@@ -362,6 +384,32 @@ def test_worker_records_verified_directory_command_failure(tmp_path):
     status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
     assert status.state == "failed"
     assert status.error == "Command exited with status 7"
+
+
+def test_worker_rechecks_materialized_snapshot_before_execution(tmp_path, monkeypatch):
+    source = _verified_directory_source(tmp_path, 'print("original")\n')
+    experiment = plan_experiment(
+        PlanRequest(
+            name="snapshot-race",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="directory-snapshot",
+        )
+    )
+    original_copytree = worker_module.shutil.copytree
+
+    def tamper(source_path, destination_path, *args, **kwargs):
+        (Path(source_path) / "train.py").write_text('print("tampered")\n', encoding="utf-8")
+        return original_copytree(source_path, destination_path, *args, **kwargs)
+
+    monkeypatch.setattr(worker_module.shutil, "copytree", tamper)
+    with pytest.raises(WorkerError, match="checksum"):
+        run_experiment(experiment)
+
+    assert not (experiment / "artifacts" / "result.txt").exists()
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    assert status.state == "failed"
 
 
 def test_worker_executes_directory_snapshot_source_from_isolated_workspace(tmp_path):

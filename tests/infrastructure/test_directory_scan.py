@@ -69,6 +69,15 @@ def test_scan_directory_applies_gitignore_basename_and_path_patterns(tmp_path):
     assert [entry.path for entry in result.files] == [".gitignore", "keep.txt"]
 
 
+def test_scan_directory_can_reject_gitignore_excluded_files(tmp_path):
+    root = tmp_path / "source"
+    _write(root / ".gitignore", "scratch/\n")
+    _write(root / "scratch" / "generated.txt", "generated\n")
+
+    with pytest.raises(DirectoryScanError, match="excluded by [.]gitignore"):
+        scan_directory(root, reject_ignored=True)
+
+
 def test_scan_directory_does_not_give_runforgeignore_special_meaning(tmp_path):
     root = tmp_path / "source"
     _write(root / ".runforgeignore", "*.log\n")

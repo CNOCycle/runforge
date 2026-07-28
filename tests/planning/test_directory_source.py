@@ -28,6 +28,17 @@ def test_resolve_verified_directory_source_scans_and_normalizes_identity(tmp_pat
     assert [entry.path for entry in resolved.manifest.entries] == ["nested/config.json", "train.py"]
 
 
+def test_resolve_verified_directory_source_rejects_gitignore_excluded_files(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / ".gitignore").write_text("scratch/\n", encoding="utf-8")
+    (source / "scratch").mkdir()
+    (source / "scratch" / "generated.txt").write_text("generated\n", encoding="utf-8")
+
+    with pytest.raises(DirectorySourceResolutionError, match="excluded by [.]gitignore"):
+        resolve_verified_directory_source(source)
+
+
 def test_resolve_verified_directory_source_rejects_missing_or_non_directory_path(tmp_path):
     with pytest.raises(DirectorySourceResolutionError, match="non-symlink directory"):
         resolve_verified_directory_source(tmp_path / "missing")

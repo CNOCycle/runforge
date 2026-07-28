@@ -100,9 +100,7 @@ def run_experiment(
             progress=progress,
         )
     except WorkerError as error:
-        experiment.save_status(
-            replace(status, state="failed", updated_at=utc_now(), finished_at=utc_now(), error=str(error)),
-        )
+        experiment.save_status(_failed_status(experiment, status, str(error)))
         _notify_progress(
             progress,
             replace(
@@ -113,9 +111,7 @@ def run_experiment(
         raise
     except OSError as error:
         failure = WorkerError(str(error))
-        experiment.save_status(
-            replace(status, state="failed", updated_at=utc_now(), finished_at=utc_now(), error=str(failure)),
-        )
+        experiment.save_status(_failed_status(experiment, status, str(failure)))
         _notify_progress(
             progress,
             replace(
@@ -135,6 +131,16 @@ def run_experiment(
         ),
     )
     return exit_code
+
+
+def _failed_status(experiment: ExperimentDirectory, fallback: ExperimentStatus, error: str) -> ExperimentStatus:
+    """Preserve an already-persisted attempt when preparation or startup fails."""
+    try:
+        current = experiment.load_status()
+    except ValueError:
+        current = fallback
+    now = utc_now()
+    return replace(current, state="failed", updated_at=now, finished_at=now, error=error)
 
 
 def _execute(
@@ -225,6 +231,13 @@ def _execute_directory_snapshot(
             shutil.copytree(experiment.snapshot_source_directory, workspace)
         except OSError as error:
             raise WorkerError(f"Could not materialize captured directory-snapshot source: {error}") from error
+        _verify_directory_matches_manifest(
+            experiment,
+            workspace,
+            source.tree_digest,
+            changed_message="Materialized directory-snapshot source does not match its manifest",
+            scan_mode="complete",
+        )
         return _run_in_working_directory(
             experiment, configuration, status, workspace, _ExecutionOptions(stream_output, progress)
         )
@@ -270,6 +283,7 @@ def _verify_verified_directory_source(experiment: ExperimentDirectory, source: V
         source.path,
         source.tree_digest,
         changed_message="Verified-directory source has changed since planning",
+        scan_mode="reject-ignored",
     )
 
 
@@ -292,10 +306,15 @@ def _verify_directory_matches_manifest(
     tree_digest: str,
     *,
     changed_message: str,
+    scan_mode: Literal["ignored", "complete", "reject-ignored"] = "ignored",
 ) -> None:
     manifest = _load_directory_source_manifest(experiment, tree_digest)
     try:
-        scan = scan_directory(directory)
+        scan = scan_directory(
+            directory,
+            ignore_file=scan_mode != "complete",
+            reject_ignored=scan_mode == "reject-ignored",
+        )
     except DirectoryScanError as error:
         raise WorkerError(str(error)) from error
     expected = {entry.path: entry for entry in manifest.entries}
