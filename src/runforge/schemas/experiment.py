@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from runforge.schemas.directory_source import DirectorySnapshotSource, VerifiedDirectorySource
 from runforge.schemas.source import GitSource
 from runforge.schemas.validation import (
     require_exact_fields,
@@ -26,6 +27,19 @@ _STATUS_STATES = frozenset({"created", "init", "inprogress", "completed", "faile
 
 class ExperimentSchemaError(ValueError):
     """Raised when experiment command, configuration, or status data is invalid."""
+
+
+def _decode_source(value: Any) -> GitSource | VerifiedDirectorySource | DirectorySnapshotSource:
+    """Decode one persisted source object by its discriminating kind."""
+    data = require_object(value, "source", ExperimentSchemaError)
+    kind = data.get("kind")
+    if kind == "runforge_git_source":
+        return GitSource.from_dict(value)
+    if kind == "runforge_verified_directory_source":
+        return VerifiedDirectorySource.from_dict(value)
+    if kind == "runforge_directory_snapshot_source":
+        return DirectorySnapshotSource.from_dict(value)
+    raise ExperimentSchemaError(f"Unsupported experiment source kind: {kind!r}")
 
 
 def _arguments(value: Any) -> tuple[str, ...]:
@@ -121,7 +135,7 @@ class ExperimentConfiguration:
     name: str
     command: ExperimentCommand
     environment: Mapping[str, str]
-    source: GitSource
+    source: GitSource | VerifiedDirectorySource | DirectorySnapshotSource
     created_at: str
     parameters: Mapping[str, str | int | float | bool] = field(default_factory=dict)
 
@@ -132,8 +146,10 @@ class ExperimentConfiguration:
             raise ExperimentSchemaError("command must be ExperimentCommand metadata")
         environment = require_string_mapping(self.environment, "environment", ExperimentSchemaError)
         object.__setattr__(self, "environment", environment)
-        if not isinstance(self.source, GitSource):
-            raise ExperimentSchemaError("source must be GitSource metadata")
+        if not isinstance(self.source, GitSource | VerifiedDirectorySource | DirectorySnapshotSource):
+            raise ExperimentSchemaError(
+                "source must be GitSource, VerifiedDirectorySource, or DirectorySnapshotSource metadata"
+            )
         require_text(self.created_at, "created_at", ExperimentSchemaError)
         parameters = require_json_scalar_mapping(self.parameters, "parameters", ExperimentSchemaError)
         object.__setattr__(self, "parameters", parameters)
@@ -179,7 +195,7 @@ class ExperimentConfiguration:
             name=require_text(data["name"], "name", ExperimentSchemaError),
             command=ExperimentCommand.from_dict(data["command"]),
             environment=require_string_mapping(data["environment"], "environment", ExperimentSchemaError),
-            source=GitSource.from_dict(data["source"]),
+            source=_decode_source(data["source"]),
             created_at=require_text(data["created_at"], "created_at", ExperimentSchemaError),
             parameters=(
                 (

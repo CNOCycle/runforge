@@ -11,6 +11,10 @@ The first-class workflow is Git-backed. A plan can either capture the current
 external patch. Both source modes can expand a deterministic parameter matrix
 into independent plans. Planning never executes the experiment command.
 Running later reconstructs the normalized source in a detached worktree.
+`verified-directory` and `directory-snapshot` extend the same planner and
+worker to simple-script directories that are not Git repositories, or that a
+user simply prefers to plan directly; see
+[Non-Git Directory Sources](#non-git-directory-sources).
 
 RunForge is organized around two roles. A **planner** creates immutable
 experiment directories containing source identity, rendered commands,
@@ -229,6 +233,28 @@ untracked-file warning) across every combination, validates every combination
 before publication, and does not execute any experiment. Use
 `runforge run EXPERIMENT_DIRECTORY` for each resulting plan.
 
+## Non-Git Directory Sources
+
+`--source-mode verified-directory` and `--source-mode directory-snapshot` plan
+a directory directly, whether or not it sits inside a Git repository. Neither
+mode captures a Git commit, branch, patch, or untracked-file list. `--out-dir`
+is required for both and must resolve outside `--source-path`:
+
+```bash
+runforge plan --source-mode verified-directory \
+  --source-path "$SOURCE_DIR" --out-dir "$SOURCE_DIR-reports" \
+  -- python train.py --out '{ARTIFACT_DIR}'
+```
+
+`verified-directory` records only a manifest and re-verifies the live
+directory at the same path before every run. `directory-snapshot` copies the
+source tree into the experiment directory at plan time, so the original
+directory can be moved or deleted afterward. Both support `matrix` the same
+way Git sources do, sharing one validated source identity across every
+combination. See the
+[non-Git sources guide](docs/guides/non-git-sources.md) for the full
+contract, ignore rules, and layout.
+
 ## Discover Planned Experiments
 
 Inspect every RunForge experiment below a report root with:
@@ -376,6 +402,12 @@ REPORT_ROOT/
       artifacts/
       attempt-NNNN/    # prior retry status snapshot, logs, and artifacts
 ```
+
+`verified-directory` and `directory-snapshot` plans use `verified/` and
+`snapshot/` report bands keyed by the source's full-tree digest instead of a
+Git branch and commit, and store `source-manifest.json` (plus a captured
+`source/` tree for `directory-snapshot`) instead of `git.patch`. See the
+[non-Git sources guide](docs/guides/non-git-sources.md) for that layout.
 
 The lifecycle is `created -> init -> inprogress -> completed|failed`.
 

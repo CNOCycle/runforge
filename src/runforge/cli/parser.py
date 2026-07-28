@@ -33,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the complete RunForge argument parser."""
     parser = argparse.ArgumentParser(
         prog="runforge",
-        description="Plan, inspect, and run reproducible Git-backed experiments.",
+        description="Plan, inspect, and run reproducible Git-backed and non-Git experiments.",
         epilog="Use 'runforge SUBCOMMAND --help' for detailed subcommand options.",
         formatter_class=SemanticDefaultsHelpFormatter,
     )
@@ -42,16 +42,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     plan = subparsers.add_parser(
         "plan",
-        help="create one Git-backed experiment directory without execution",
-        description="Create one Git-backed experiment directory without executing its command.",
+        help="create one experiment directory without execution",
+        description="Create one Git-backed or non-Git experiment directory without executing its command.",
         formatter_class=SemanticDefaultsHelpFormatter,
     )
     _add_planning_arguments(plan)
 
     launch = subparsers.add_parser(
         "launch",
-        help="create and immediately run one Git-backed experiment",
-        description="Create one Git-backed experiment directory and execute it immediately.",
+        help="create and immediately run one experiment",
+        description="Create one Git-backed or non-Git experiment directory and execute it immediately.",
         formatter_class=SemanticDefaultsHelpFormatter,
     )
     _add_planning_arguments(launch)
@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     matrix = subparsers.add_parser(
         "matrix",
         help="create a Cartesian experiment matrix from one shared source",
-        description="Create a Cartesian matrix of plans that all share one resolved Git source.",
+        description="Create a Cartesian matrix of plans that all share one resolved Git-backed or non-Git source.",
         formatter_class=SemanticDefaultsHelpFormatter,
     )
     matrix.add_argument(
@@ -133,19 +133,29 @@ def _add_planning_arguments(parser: argparse.ArgumentParser, *, default_source_m
     parser.add_argument(
         "--out-dir",
         type=Path,
-        help="root directory for experiment outputs (default: SOURCE_REPOSITORY/reports)",
+        help=(
+            "root directory for experiment outputs (default: SOURCE_REPOSITORY/reports for current-head and "
+            "pinned-git; required and must resolve outside --source-path for verified-directory and "
+            "directory-snapshot)"
+        ),
     )
     parser.add_argument(
         "--source-path",
         type=Path,
         default=Path("."),
-        help="path within the source Git repository (default: current directory)",
+        help=(
+            "path within the source Git repository for current-head/pinned-git, or the directory to verify/capture "
+            "for verified-directory/directory-snapshot (default: current directory)"
+        ),
     )
     parser.add_argument(
         "--source-mode",
-        choices=("current-head", "pinned-git"),
+        choices=("current-head", "pinned-git", "verified-directory", "directory-snapshot"),
         default=default_source_mode,
-        help="source selection mode",
+        help=(
+            "source selection mode: Git current-HEAD or pinned-commit, or non-Git verified-directory "
+            "(live external path, re-verified before every run) or directory-snapshot (self-contained captured copy)"
+        ),
     )
     parser.add_argument(
         "--commit",
