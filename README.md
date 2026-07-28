@@ -78,7 +78,7 @@ from a detached worktree of that repository. In the example above,
 Planning confirms where the experiment plan was created:
 
 ```text
-Experiment plan created at: $REPO/reports/main/01234567_baseline_0
+Experiment plan created at: $REPO/reports/main/01234567_baseline_0000
 ```
 
 The directory name follows this rule:
@@ -90,7 +90,7 @@ REPORT_ROOT/{BRANCH_SLUG}/{COMMIT8}_{NAME_SLUG}_{COUNT}
 For example:
 
 ```text
-$REPO/reports/main/01234567_baseline_0
+$REPO/reports/main/01234567_baseline_0000
 ```
 
 `COMMIT8` is the first 8 hexadecimal characters of the recorded commit.
@@ -102,7 +102,7 @@ Run that exact directory on the same or another machine with access to the
 recorded repository:
 
 ```bash
-runforge run "$REPO/reports/main/01234567_baseline_0"
+runforge run "$REPO/reports/main/01234567_baseline_0000"
 ```
 
 The worker returns the planned command's exit code. A non-zero command exit
@@ -134,7 +134,7 @@ runforge launch --stream-output \
   --source-path "$REPO" \
   -- python train.py --output '{ARTIFACT_DIR}'
 
-runforge run --stream-output "$REPO/reports/main/01234567_baseline_0"
+runforge run --stream-output "$REPO/reports/main/01234567_baseline_0000"
 ```
 
 RunForge forwards output as the command emits it. Programs that buffer their
@@ -151,7 +151,7 @@ Retry starts another execution of the same immutable experiment configuration;
 it does not resume the previous process or select a training checkpoint:
 
 ```bash
-runforge retry --stream-output "$REPO/reports/main/01234567_baseline_0"
+runforge retry --stream-output "$REPO/reports/main/01234567_baseline_0000"
 ```
 
 A normal retry accepts a `failed` experiment. An experiment left in
@@ -160,7 +160,7 @@ process has stopped:
 
 ```bash
 runforge retry --force --stream-output \
-  "$REPO/reports/main/01234567_baseline_0"
+  "$REPO/reports/main/01234567_baseline_0000"
 ```
 
 `--force` is a single-controller escape hatch. RunForge cannot yet prove that
