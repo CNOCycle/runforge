@@ -99,6 +99,7 @@ def test_discover_help_describes_list_and_sequential_execution_defaults(capsys):
     assert "default mode only lists status" in output
     assert "directory to scan recursively (default: current directory)" in output
     assert "run created experiments sequentially after discovery (default: disabled; list only)" in output
+    assert "maximum number of experiments to launch with --execute (default: unlimited; requires --execute)" in output
     assert "stream stdout and stderr while preserving log files (default: disabled)" in output
 
 

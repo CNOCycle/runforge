@@ -8,6 +8,17 @@ from pathlib import Path
 from runforge.version import display_version
 
 
+def _positive_integer(value: str) -> int:
+    """Parse a strictly positive integer CLI value."""
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be an integer") from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
 class SemanticDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
     """Show literal defaults automatically while preserving semantic descriptions."""
 
@@ -106,6 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--execute",
         action="store_true",
         help="run created experiments sequentially after discovery (default: disabled; list only)",
+    )
+    discover.add_argument(
+        "--max-tasks",
+        type=_positive_integer,
+        metavar="N",
+        help="maximum number of experiments to launch with --execute (default: unlimited; requires --execute)",
     )
     _add_stream_output_argument(discover)
     return parser
