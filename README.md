@@ -260,6 +260,11 @@ after individual failures. Plans in `init`, `inprogress`, `completed`, or
 `failed` remain visible but are skipped. Plans published after the scan wait
 for the next invocation.
 
+Use `--max-tasks N` with `--execute` to bound one worker invocation. `N` must
+be positive; the command starts at most `N` eligible experiments and reports any
+remaining created plans as deferred. Without `--max-tasks`, all eligible plans
+are attempted. The option is invalid in read-only discovery mode.
+
 By default, child output remains in each experiment's `stdout.log` and
 `stderr.log`. Add `--stream-output` with `--execute` to also show it in the
 console:

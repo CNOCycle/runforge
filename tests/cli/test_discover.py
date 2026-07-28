@@ -69,6 +69,7 @@ def test_discover_cli_lists_experiments_and_state_totals(tmp_path, capsys):
         "RunForge discover effective arguments:",
         f"  root: {root.resolve()}",
         "  execute: disabled",
+        "  max tasks: unlimited",
         "  stream output: disabled",
         f"Experiments discovered under: {root.resolve()}",
         f"created | attempt=0 | name=new run | source=main@aaaaaaaa | path={first.resolve()}",
@@ -96,6 +97,7 @@ def test_discover_cli_reports_an_empty_default_root(tmp_path, monkeypatch, capsy
         "RunForge discover effective arguments:",
         f"  root: {root.resolve()}",
         "  execute: disabled",
+        "  max tasks: unlimited",
         "  stream output: disabled",
         f"Experiments discovered under: {root.resolve()}",
         "No experiments found.",
@@ -170,6 +172,35 @@ def test_discover_execute_runs_created_plans_and_skips_other_states(tmp_path, ca
     assert "  skipped: 1" in captured.out
     assert ExperimentStatus.from_dict(load_json_object(created / "status.json")).state == "completed"
     assert ExperimentStatus.from_dict(load_json_object(skipped / "status.json")) == skipped_status
+
+
+def test_discover_rejects_max_tasks_without_execute(tmp_path, capsys):
+    reports = tmp_path / "reports"
+    reports.mkdir()
+
+    assert main(["discover", str(reports), "--max-tasks", "1"]) == CLI_ERROR_EXIT
+
+    captured = capsys.readouterr()
+    assert "error: --max-tasks requires --execute" in captured.err
+
+
+def test_discover_execute_limits_started_tasks_and_reports_deferred_tasks(tmp_path, capsys):
+    repository = _repository(tmp_path)
+    reports = tmp_path / "reports"
+    first = _plan(repository, reports, name="a-first", script="print('first')")
+    second = _plan(repository, reports, name="b-second", script="print('second')")
+
+    assert main(["discover", str(reports), "--execute", "--max-tasks", "1"]) == 0
+
+    captured = capsys.readouterr()
+    assert "  max tasks: 1" in captured.out
+    assert f"Selected experiment (1/1): {first}" in captured.out
+    assert f"Selected experiment (1/1): {second}" not in captured.out
+    assert "  selected: 1" in captured.out
+    assert "  completed: 1" in captured.out
+    assert "  deferred: 1" in captured.out
+    assert ExperimentStatus.from_dict(load_json_object(first / "status.json")).state == "completed"
+    assert ExperimentStatus.from_dict(load_json_object(second / "status.json")).state == "created"
 
 
 def test_discover_execute_continues_after_worker_and_command_failures(tmp_path, capsys):

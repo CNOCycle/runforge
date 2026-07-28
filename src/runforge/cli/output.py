@@ -113,6 +113,7 @@ def print_discover_arguments(arguments: argparse.Namespace) -> None:
         [
             ("root", path_text(arguments.root)),
             ("execute", boolean_text(arguments.execute)),
+            ("max tasks", str(arguments.max_tasks) if arguments.max_tasks is not None else "unlimited"),
             ("stream output", boolean_text(arguments.stream_output)),
         ],
     )

@@ -30,7 +30,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if arguments.subcommand == "discover":
             print_discover_arguments(arguments)
-            return _discover(arguments.root, execute=arguments.execute, stream_output=arguments.stream_output)
+            return _discover(
+                arguments.root,
+                execute=arguments.execute,
+                stream_output=arguments.stream_output,
+                max_tasks=arguments.max_tasks,
+            )
         if arguments.subcommand == "matrix":
             request = matrix_request(arguments)
             print_planning_arguments(
@@ -85,18 +90,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
 
-def _discover(root: Path, *, execute: bool, stream_output: bool) -> int:
+def _discover(root: Path, *, execute: bool, stream_output: bool, max_tasks: int | None) -> int:
     if stream_output and not execute:
         raise ValueError("--stream-output requires --execute")
+    if max_tasks is not None and not execute:
+        raise ValueError("--max-tasks requires --execute")
     result = discover_experiments(root)
     print_discovery(result)
     if not execute:
         return 2 if result.diagnostics else 0
-    return _execute_discovered(result, stream_output=stream_output)
+    return _execute_discovered(result, stream_output=stream_output, max_tasks=max_tasks)
 
 
-def _execute_discovered(result: DiscoveryResult, *, stream_output: bool) -> int:
-    selected = tuple(experiment for experiment in result.experiments if experiment.status.state == "created")
+def _execute_discovered(
+    result: DiscoveryResult,
+    *,
+    stream_output: bool,
+    max_tasks: int | None,
+) -> int:
+    eligible = tuple(experiment for experiment in result.experiments if experiment.status.state == "created")
+    selected = eligible if max_tasks is None else eligible[:max_tasks]
+    deferred = len(eligible) - len(selected)
     completed = 0
     failed = 0
     for index, experiment in enumerate(selected, start=1):
@@ -119,7 +133,8 @@ def _execute_discovered(result: DiscoveryResult, *, stream_output: bool) -> int:
     print(f"  selected: {len(selected)}")
     print(f"  completed: {completed}")
     print(f"  failed: {failed}")
-    print(f"  skipped: {len(result.experiments) - len(selected)}")
+    print(f"  skipped: {len(result.experiments) - len(eligible)}")
+    print(f"  deferred: {deferred}")
     print(f"  invalid: {len(result.diagnostics)}")
     if result.diagnostics:
         return 2
