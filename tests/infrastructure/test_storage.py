@@ -43,5 +43,7 @@ def test_experiment_directory_centralizes_paths_and_metadata_round_trip(tmp_path
     assert layout.input_file("configs/train.yaml") == layout.inputs / "configs/train.yaml"
     assert layout.stdout_log == layout.root / "stdout.log"
     assert layout.stderr_log == layout.root / "stderr.log"
+    assert layout.claim == layout.root / "claim"
+    assert layout.claim_file == layout.root / "claim/owner.json"
     assert layout.source_file("git.patch") == layout.git_patch_file
     assert layout.load_input_manifest() == manifest
