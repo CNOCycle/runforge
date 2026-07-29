@@ -48,7 +48,6 @@ def test_version_flags_print_one_line_without_a_subcommand(capsys):
         (["launch", "-s", "--", "python", "train.py"], "stream_output"),
         (["run", "-s", "experiment"], "stream_output"),
         (["retry", "-s", "experiment"], "stream_output"),
-        (["discover", "-s", "--execute"], "stream_output"),
         (["retry", "-f", "experiment"], "force"),
     ],
 )
@@ -113,14 +112,11 @@ def test_retry_help_describes_state_policy_and_safe_defaults(capsys):
     assert "stream stdout and stderr while preserving log files (default: disabled)" in output
 
 
-def test_discover_help_describes_list_and_sequential_execution_defaults(capsys):
+def test_discover_help_describes_read_only_listing(capsys):
     output = _single_line(_help(capsys, "discover"))
 
-    assert "default mode only lists status" in output
+    assert "without changing status or executing commands" in output
     assert "directory to scan recursively (default: current directory)" in output
-    assert "run created experiments sequentially after discovery (default: disabled; list only)" in output
-    assert "maximum number of experiments to launch with --execute (default: unlimited; requires --execute)" in output
-    assert "stream stdout and stderr while preserving log files (default: disabled)" in output
 
 
 @pytest.mark.parametrize("subcommand", ["plan", "launch", "matrix", "run", "retry", "discover"])

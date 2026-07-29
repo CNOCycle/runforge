@@ -120,16 +120,8 @@ def print_retry_arguments(arguments: argparse.Namespace) -> None:
 
 
 def print_discover_arguments(arguments: argparse.Namespace) -> None:
-    """Print effective arguments for discovery list or execution mode."""
-    _print_effective_arguments(
-        "discover",
-        [
-            ("root", path_text(arguments.root)),
-            ("execute", boolean_text(arguments.execute)),
-            ("max tasks", str(arguments.max_tasks) if arguments.max_tasks is not None else "unlimited"),
-            ("stream output", boolean_text(arguments.stream_output)),
-        ],
-    )
+    """Print the effective root for read-only discovery."""
+    _print_effective_arguments("discover", [("root", path_text(arguments.root))])
 
 
 def print_worker_progress(event: WorkerProgressEvent) -> None:
