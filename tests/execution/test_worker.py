@@ -9,7 +9,9 @@ import pytest
 
 import runforge.execution.worker as worker_module
 from runforge.execution.worker import WorkerError, WorkerProgressEvent, run_experiment
+from runforge.infrastructure.claims import ClaimError, release_claim, try_acquire_claim
 from runforge.infrastructure.json_store import load_json_object
+from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.planning.inputs import InputTemplate
 from runforge.planning.planner import PlanRequest, plan_experiment
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
@@ -29,6 +31,91 @@ def _verified_directory_source(tmp_path: Path, script: str) -> Path:
     source.mkdir()
     (source / "train.py").write_text(script, encoding="utf-8")
     return source
+
+
+def test_executor_rejects_an_already_claimed_experiment(tmp_path):
+    repository = _repository(tmp_path, "print('must not run')\n")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="claimed",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            output_root=tmp_path / "reports",
+            source_path=repository,
+        )
+    )
+    claim = try_acquire_claim(ExperimentDirectory.resolve(experiment), owner="other-worker")
+    assert claim is not None
+
+    # The operator must be told which process holds the claim.
+    with pytest.raises(WorkerError, match="already claimed.*held by other-worker since "):
+        run_experiment(experiment)
+
+    release_claim(ExperimentDirectory.resolve(experiment), claim)
+
+
+def test_executor_warns_but_keeps_the_result_when_a_claim_cannot_be_released(tmp_path, monkeypatch, capsys):
+    repository = _repository(tmp_path, "print('done')\n")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="release-failure",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            output_root=tmp_path / "reports",
+            source_path=repository,
+        )
+    )
+
+    def fail_release(*args, **kwargs):
+        raise ClaimError("metadata unavailable")
+
+    monkeypatch.setattr(worker_module, "release_claim", fail_release)
+
+    assert run_experiment(experiment) == 0
+
+    error_output = capsys.readouterr().err
+    assert "Could not release claim" in error_output
+    assert "metadata unavailable" in error_output
+    status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
+    assert status.state == "completed"
+    assert status.exit_code == 0
+
+
+def test_executor_reports_the_original_failure_when_a_claim_cannot_be_released(tmp_path, monkeypatch, capsys):
+    repository = _repository(tmp_path, "print('done')\n")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="masked-failure",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            output_root=tmp_path / "reports",
+            source_path=repository,
+        )
+    )
+    (experiment / "inputs").mkdir()
+
+    def fail_release(*args, **kwargs):
+        raise ClaimError("metadata unavailable")
+
+    monkeypatch.setattr(worker_module, "release_claim", fail_release)
+
+    # The preparation failure must survive; the release problem is only a warning.
+    with pytest.raises(WorkerError, match="Planned input manifest is missing"):
+        run_experiment(experiment)
+
+    assert "Could not release claim" in capsys.readouterr().err
+
+
+def test_executor_releases_its_claim_after_execution(tmp_path):
+    repository = _repository(tmp_path, "print('done')\n")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="released",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            output_root=tmp_path / "reports",
+            source_path=repository,
+        )
+    )
+
+    assert run_experiment(experiment) == 0
+    assert not ExperimentDirectory.resolve(experiment).claim.exists()
 
 
 def test_worker_executes_recorded_commit_and_patch_then_cleans_worktree(tmp_path):
