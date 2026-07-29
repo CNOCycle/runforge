@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
 import warnings
 from collections.abc import Sequence
@@ -28,63 +29,82 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the RunForge CLI and return its process exit code."""
     arguments = build_parser().parse_args(argv)
     try:
-        if arguments.subcommand == "discover":
-            print_discover_arguments(arguments)
-            result = discover_experiments(arguments.root)
-            print_discovery(result)
-            return 2 if result.diagnostics else 0
-        if arguments.subcommand == "matrix":
-            request = matrix_request(arguments)
-            print_planning_arguments(
-                arguments,
-                request.template,
-                extra=(
-                    ("matrix file", path_text(arguments.matrix_file)),
-                    ("matrix combinations", str(len(request.combinations))),
-                ),
-            )
-            experiments = _plan_matrix_with_warnings(request)
-            print(f"Experiment plans created ({len(experiments)}):", flush=True)
-            for experiment in experiments:
-                print(f"  {experiment}", flush=True)
-            return 0
-        if arguments.subcommand in {"plan", "launch"}:
-            request = planning_request(arguments)
-            print_planning_arguments(arguments, request)
-            experiment = _plan_with_warnings(request)
-            print(f"Experiment plan created at: {experiment}", flush=True)
-            exit_code = 0
-            if arguments.subcommand == "launch":
-                exit_code = run_experiment(
-                    experiment,
-                    stream_output=arguments.stream_output,
-                    progress=print_worker_progress,
-                )
-            return exit_code
-        if arguments.subcommand == "retry":
-            print_retry_arguments(arguments)
-            preparation = prepare_retry(arguments.experiment, force=arguments.force)
-            if preparation.forced:
-                print(
-                    "warning: Forced retry cannot prove that the previous worker has stopped",
-                    file=sys.stderr,
-                    flush=True,
-                )
-            print(f"Previous attempt archived at: {preparation.archive}", flush=True)
-            return run_experiment(
-                preparation.experiment,
-                stream_output=arguments.stream_output,
-                progress=print_worker_progress,
-            )
-        print_run_arguments(arguments)
-        return run_experiment(
-            arguments.experiment,
-            stream_output=arguments.stream_output,
-            progress=print_worker_progress,
-        )
+        return _dispatch(arguments)
     except (DiscoveryError, PlanningError, RetryError, WorkerError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
+
+
+def _dispatch(arguments: argparse.Namespace) -> int:
+    if arguments.subcommand == "discover":
+        return _run_discover_command(arguments)
+    if arguments.subcommand == "matrix":
+        return _run_matrix_command(arguments)
+    if arguments.subcommand in {"plan", "launch"}:
+        return _run_plan_command(arguments)
+    if arguments.subcommand == "retry":
+        return _run_retry_command(arguments)
+    print_run_arguments(arguments)
+    return run_experiment(
+        arguments.experiment,
+        stream_output=arguments.stream_output,
+        progress=print_worker_progress,
+    )
+
+
+def _run_matrix_command(arguments: argparse.Namespace) -> int:
+    request = matrix_request(arguments)
+    print_planning_arguments(
+        arguments,
+        request.template,
+        extra=(
+            ("matrix file", path_text(arguments.matrix_file)),
+            ("matrix combinations", str(len(request.combinations))),
+        ),
+    )
+    experiments = _plan_matrix_with_warnings(request)
+    print(f"Experiment plans created ({len(experiments)}):", flush=True)
+    for experiment in experiments:
+        print(f"  {experiment}", flush=True)
+    return 0
+
+
+def _run_plan_command(arguments: argparse.Namespace) -> int:
+    request = planning_request(arguments)
+    print_planning_arguments(arguments, request)
+    experiment = _plan_with_warnings(request)
+    print(f"Experiment plan created at: {experiment}", flush=True)
+    if arguments.subcommand != "launch":
+        return 0
+    return run_experiment(
+        experiment,
+        stream_output=arguments.stream_output,
+        progress=print_worker_progress,
+    )
+
+
+def _run_retry_command(arguments: argparse.Namespace) -> int:
+    print_retry_arguments(arguments)
+    preparation = prepare_retry(arguments.experiment, force=arguments.force)
+    if preparation.forced:
+        print(
+            "warning: Forced retry cannot prove that the previous worker has stopped",
+            file=sys.stderr,
+            flush=True,
+        )
+    print(f"Previous attempt archived at: {preparation.archive}", flush=True)
+    return run_experiment(
+        preparation.experiment,
+        stream_output=arguments.stream_output,
+        progress=print_worker_progress,
+    )
+
+
+def _run_discover_command(arguments: argparse.Namespace) -> int:
+    print_discover_arguments(arguments)
+    result = discover_experiments(arguments.root)
+    print_discovery(result)
+    return 2 if result.diagnostics else 0
 
 
 def _plan_with_warnings(request: PlanRequest) -> Path:
