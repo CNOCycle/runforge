@@ -15,13 +15,15 @@ from runforge.cli.output import (
     print_planning_arguments,
     print_retry_arguments,
     print_run_arguments,
+    print_worker_arguments,
     print_worker_progress,
+    print_worker_summary,
 )
 from runforge.cli.parser import build_parser
 from runforge.cli.requests import matrix_request, planning_request
 from runforge.execution.discovery import DiscoveryError, discover_experiments
 from runforge.execution.retry import RetryError, prepare_retry
-from runforge.execution.worker import WorkerError, run_experiment
+from runforge.execution.worker import WorkerError, run_experiment, run_worker
 from runforge.planning.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
 
 
@@ -38,6 +40,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _dispatch(arguments: argparse.Namespace) -> int:
     if arguments.subcommand == "discover":
         return _run_discover_command(arguments)
+    if arguments.subcommand == "worker":
+        return _run_worker_command(arguments)
     if arguments.subcommand == "matrix":
         return _run_matrix_command(arguments)
     if arguments.subcommand in {"plan", "launch"}:
@@ -105,6 +109,20 @@ def _run_discover_command(arguments: argparse.Namespace) -> int:
     result = discover_experiments(arguments.root)
     print_discovery(result)
     return 2 if result.diagnostics else 0
+
+
+def _run_worker_command(arguments: argparse.Namespace) -> int:
+    print_worker_arguments(arguments)
+    result = run_worker(
+        arguments.root,
+        max_tasks=arguments.max_tasks,
+        stream_output=arguments.stream_output,
+        progress=print_worker_progress,
+    )
+    print_worker_summary(result)
+    if result.invalid:
+        return 2
+    return 1 if result.failed else 0
 
 
 def _plan_with_warnings(request: PlanRequest) -> Path:

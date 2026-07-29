@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from runforge.execution.discovery import DiscoveryResult
-from runforge.execution.worker import WorkerProgressEvent
+from runforge.execution.worker import WorkerProgressEvent, WorkerResult
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.planning.planner import PlanRequest
@@ -122,6 +122,37 @@ def print_retry_arguments(arguments: argparse.Namespace) -> None:
 def print_discover_arguments(arguments: argparse.Namespace) -> None:
     """Print the effective root for read-only discovery."""
     _print_effective_arguments("discover", [("root", path_text(arguments.root))])
+
+
+def print_worker_arguments(arguments: argparse.Namespace) -> None:
+    """Print effective arguments for one finite shared-worker invocation."""
+    max_tasks = arguments.max_tasks
+    effective_limit = "unlimited" if max_tasks is None else str(max_tasks)
+    _print_effective_arguments(
+        "worker",
+        [
+            ("root", path_text(arguments.root)),
+            ("max tasks", effective_limit),
+            ("stream output", boolean_text(arguments.stream_output)),
+        ],
+    )
+
+
+def print_worker_summary(result: WorkerResult) -> None:
+    """Print the counts from one finite shared-worker invocation."""
+    # Flushed like progress output: claim warnings go to stderr, so an unflushed
+    # summary on a redirected stdout could otherwise appear before them.
+    print("Worker summary:", flush=True)
+    print(f"  candidates: {result.candidates}", flush=True)
+    print(f"  selected: {result.selected}", flush=True)
+    print(f"  completed: {result.completed}", flush=True)
+    print(f"  failed: {result.failed}", flush=True)
+    print(f"  skipped: {result.skipped}", flush=True)
+    print(f"    non-runnable: {result.not_runnable}", flush=True)
+    print(f"    claim contention: {result.claim_contended}", flush=True)
+    print(f"    stale after claim: {result.stale_skipped}", flush=True)
+    print(f"  deferred: {result.deferred}", flush=True)
+    print(f"  invalid: {result.invalid}", flush=True)
 
 
 def print_worker_progress(event: WorkerProgressEvent) -> None:

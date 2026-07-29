@@ -28,7 +28,7 @@ def test_top_level_help_lists_every_command_and_subcommand_guidance(capsys):
     output = _help(capsys)
 
     assert "Plan, inspect, and run reproducible Git-backed and non-Git experiments." in output
-    for subcommand in ("plan", "launch", "matrix", "run", "retry", "discover"):
+    for subcommand in ("plan", "launch", "matrix", "run", "retry", "discover", "worker"):
         assert subcommand in output
     assert "runforge SUBCOMMAND --help" in output
     assert "-v, --version" in output
@@ -49,6 +49,7 @@ def test_version_flags_print_one_line_without_a_subcommand(capsys):
         (["run", "-s", "experiment"], "stream_output"),
         (["retry", "-s", "experiment"], "stream_output"),
         (["retry", "-f", "experiment"], "force"),
+        (["worker", "-s"], "stream_output"),
     ],
 )
 def test_short_flags_match_their_long_option_destinations(arguments, attribute):
@@ -119,9 +120,18 @@ def test_discover_help_describes_read_only_listing(capsys):
     assert "directory to scan recursively (default: current directory)" in output
 
 
-@pytest.mark.parametrize("subcommand", ["plan", "launch", "matrix", "run", "retry", "discover"])
+@pytest.mark.parametrize("subcommand", ["plan", "launch", "matrix", "run", "retry", "discover", "worker"])
 def test_subcommand_help_never_exposes_raw_python_defaults(capsys, subcommand):
     output = _help(capsys, subcommand)
 
     assert "(default: None)" not in output
     assert "(default: False)" not in output
+
+
+def test_worker_help_describes_single_snapshot_and_budget(capsys):
+    output = _single_line(_help(capsys, "worker"))
+
+    assert "one discovery snapshot" in output
+    assert "--max-tasks N" in output
+    assert "must be positive when set" in output
+    assert "stream stdout and stderr while preserving log files (default: disabled)" in output
