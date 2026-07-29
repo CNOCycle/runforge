@@ -12,7 +12,9 @@ from runforge.execution.worker import (
     ExperimentNotRunnableError,
     WorkerError,
     WorkerProgressEvent,
+    WorkerResult,
     run_experiment,
+    run_worker,
 )
 
 
@@ -26,7 +28,9 @@ __all__ = [
     "RetryPreparation",
     "WorkerError",
     "WorkerProgressEvent",
+    "WorkerResult",
     "discover_experiments",
     "prepare_retry",
     "run_experiment",
+    "run_worker",
 ]

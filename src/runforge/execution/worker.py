@@ -14,6 +14,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import BinaryIO, Literal, TextIO
 
+from runforge.execution.discovery import discover_experiments
 from runforge.infrastructure.claims import (
     ClaimError,
     ExperimentClaim,
@@ -41,6 +42,27 @@ class WorkerError(RuntimeError):
 
 class ExperimentNotRunnableError(WorkerError):
     """Raised when a claimed experiment was completed or changed by another worker."""
+
+
+@dataclass(frozen=True)
+class WorkerResult:
+    """Summary of one finite shared-worker invocation."""
+
+    root: Path
+    candidates: int
+    selected: int
+    completed: int
+    failed: int
+    not_runnable: int
+    claim_contended: int
+    stale_skipped: int
+    deferred: int
+    invalid: int
+
+    @property
+    def skipped(self) -> int:
+        """Total work skipped, derived so it cannot drift from its reasons."""
+        return self.not_runnable + self.claim_contended + self.stale_skipped
 
 
 @dataclass(frozen=True)
@@ -116,6 +138,67 @@ def run_experiment(
                     file=sys.stderr,
                     flush=True,
                 )
+
+
+def run_worker(
+    root: Path,
+    *,
+    max_tasks: int | None = None,
+    stream_output: bool = False,
+    progress: Callable[[WorkerProgressEvent], None] | None = None,
+) -> WorkerResult:
+    """Execute one finite discovery snapshot through the existing executor."""
+    if isinstance(max_tasks, bool) or (max_tasks is not None and (not isinstance(max_tasks, int) or max_tasks <= 0)):
+        raise WorkerError("max_tasks must be a positive integer or None")
+    discovery = discover_experiments(root)
+    candidates = tuple(
+        experiment for experiment in discovery.experiments if experiment.status.state in {"created", "init"}
+    )
+    selected = candidates if max_tasks is None else candidates[:max_tasks]
+    completed = 0
+    failed = 0
+    not_runnable = len(discovery.experiments) - len(candidates)
+    claim_contended = 0
+    stale_skipped = 0
+    for discovered in selected:
+        experiment = ExperimentDirectory.resolve(discovered.path)
+        try:
+            claim = try_acquire_claim(experiment)
+        except ClaimError as error:
+            print(f"warning: Could not acquire claim for {experiment.root}: {error}", file=sys.stderr, flush=True)
+            failed += 1
+            continue
+        if claim is None:
+            claim_contended += 1
+            continue
+        try:
+            exit_code = run_experiment(
+                experiment.root,
+                stream_output=stream_output,
+                progress=progress,
+                claim=claim,
+            )
+        except ExperimentNotRunnableError:
+            stale_skipped += 1
+        except WorkerError:
+            failed += 1
+        else:
+            if exit_code == 0:
+                completed += 1
+            else:
+                failed += 1
+    return WorkerResult(
+        root=discovery.root,
+        candidates=len(candidates),
+        selected=len(selected),
+        completed=completed,
+        failed=failed,
+        not_runnable=not_runnable,
+        claim_contended=claim_contended,
+        stale_skipped=stale_skipped,
+        deferred=len(candidates) - len(selected),
+        invalid=len(discovery.diagnostics),
+    )
 
 
 def _run_claimed_experiment(
