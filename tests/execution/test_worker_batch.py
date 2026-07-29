@@ -170,7 +170,7 @@ def test_worker_skips_experiment_that_becomes_non_runnable_after_claim(tmp_path)
     assert not (second / "claim").exists()
 
 
-def test_worker_counts_claim_error_and_continues(tmp_path, monkeypatch, capsys):
+def test_worker_reports_claim_error_through_progress_and_continues(tmp_path, monkeypatch, capsys):
     _plan(tmp_path, "claim-error", "print('first')\n")
     _plan(tmp_path, "runs-after-claim-error", "print('second')\n")
     original = worker_module.try_acquire_claim
@@ -184,11 +184,12 @@ def test_worker_counts_claim_error_and_continues(tmp_path, monkeypatch, capsys):
         return original(layout)
 
     monkeypatch.setattr(worker_module, "try_acquire_claim", fail_first)
-    result = run_worker(tmp_path / "reports")
+    events = []
+    result = run_worker(tmp_path / "reports", progress=events.append)
 
     assert result.completed == 1
     assert result.failed == 1
     assert result.skipped == 0
-    error_output = capsys.readouterr().err
-    assert "Could not acquire claim" in error_output
-    assert "permission denied" in error_output
+    assert capsys.readouterr().err == ""
+    warning = next(event for event in events if event.phase == "warning")
+    assert warning.error == "Could not acquire claim: permission denied"

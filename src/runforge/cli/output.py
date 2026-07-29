@@ -172,6 +172,9 @@ def print_worker_progress(event: WorkerProgressEvent) -> None:
     if event.phase == "completed":
         print(f"Experiment completed with exit code {event.exit_code}: {event.experiment}", flush=True)
         return
+    if event.phase == "warning":
+        print(f"warning: {event.error}: {event.experiment}", file=sys.stderr, flush=True)
+        return
     if event.exit_code is not None:
         message = f"Experiment failed with exit code {event.exit_code}: {event.experiment}"
     else:

@@ -78,7 +78,7 @@ class _ExecutionOptions:
 class WorkerProgressEvent:
     """One observable worker lifecycle transition."""
 
-    phase: Literal["preparing", "executing", "completed", "failed"]
+    phase: Literal["preparing", "executing", "completed", "failed", "warning"]
     experiment: Path
     stdout_log: Path
     stderr_log: Path
@@ -133,10 +133,12 @@ def run_experiment(
             except ClaimError as error:
                 # A leaked claim needs an operator, but it must not rewrite the
                 # recorded result or mask the failure that is already in flight.
-                print(
-                    f"warning: Could not release claim for {experiment.root}: {error}",
-                    file=sys.stderr,
-                    flush=True,
+                _notify_progress(
+                    progress,
+                    replace(
+                        _progress_event("warning", experiment, stream_output),
+                        error=f"Could not release claim: {error}",
+                    ),
                 )
 
 
@@ -165,7 +167,13 @@ def run_worker(
         try:
             claim = try_acquire_claim(experiment)
         except ClaimError as error:
-            print(f"warning: Could not acquire claim for {experiment.root}: {error}", file=sys.stderr, flush=True)
+            _notify_progress(
+                progress,
+                replace(
+                    _progress_event("warning", experiment, stream_output),
+                    error=f"Could not acquire claim: {error}",
+                ),
+            )
             failed += 1
             continue
         if claim is None:
@@ -682,7 +690,7 @@ def _write_console(console: TextIO, chunk: bytes) -> None:
 
 
 def _progress_event(
-    phase: Literal["preparing", "executing", "completed", "failed"],
+    phase: Literal["preparing", "executing", "completed", "failed", "warning"],
     experiment: ExperimentDirectory,
     stream_output: bool,
     *,

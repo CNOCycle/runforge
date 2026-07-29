@@ -53,7 +53,7 @@ def test_executor_rejects_an_already_claimed_experiment(tmp_path):
     release_claim(ExperimentDirectory.resolve(experiment), claim)
 
 
-def test_executor_warns_but_keeps_the_result_when_a_claim_cannot_be_released(tmp_path, monkeypatch, capsys):
+def test_executor_reports_claim_release_warning_without_console_output(tmp_path, monkeypatch, capsys):
     repository = _repository(tmp_path, "print('done')\n")
     experiment = plan_experiment(
         PlanRequest(
@@ -68,18 +68,19 @@ def test_executor_warns_but_keeps_the_result_when_a_claim_cannot_be_released(tmp
         raise ClaimError("metadata unavailable")
 
     monkeypatch.setattr(worker_module, "release_claim", fail_release)
+    events: list[WorkerProgressEvent] = []
 
-    assert run_experiment(experiment) == 0
+    assert run_experiment(experiment, progress=events.append) == 0
 
-    error_output = capsys.readouterr().err
-    assert "Could not release claim" in error_output
-    assert "metadata unavailable" in error_output
+    assert capsys.readouterr().err == ""
+    assert events[-1].phase == "warning"
+    assert events[-1].error == "Could not release claim: metadata unavailable"
     status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
     assert status.state == "completed"
     assert status.exit_code == 0
 
 
-def test_executor_reports_the_original_failure_when_a_claim_cannot_be_released(tmp_path, monkeypatch, capsys):
+def test_executor_preserves_original_failure_when_a_claim_cannot_be_released(tmp_path, monkeypatch, capsys):
     repository = _repository(tmp_path, "print('done')\n")
     experiment = plan_experiment(
         PlanRequest(
@@ -95,12 +96,15 @@ def test_executor_reports_the_original_failure_when_a_claim_cannot_be_released(t
         raise ClaimError("metadata unavailable")
 
     monkeypatch.setattr(worker_module, "release_claim", fail_release)
+    events: list[WorkerProgressEvent] = []
 
     # The preparation failure must survive; the release problem is only a warning.
     with pytest.raises(WorkerError, match="Planned input manifest is missing"):
-        run_experiment(experiment)
+        run_experiment(experiment, progress=events.append)
 
-    assert "Could not release claim" in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
+    assert events[-1].phase == "warning"
+    assert events[-1].error == "Could not release claim: metadata unavailable"
 
 
 def test_executor_releases_its_claim_after_execution(tmp_path):

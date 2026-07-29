@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from runforge.cli import main
+from runforge.cli.output import print_worker_progress
+from runforge.execution.worker import WorkerProgressEvent
 from runforge.infrastructure.json_store import load_json_object, save_json_object
 from runforge.planning.planner import PlanRequest, plan_experiment
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
@@ -246,6 +248,30 @@ def test_cli_launches_a_new_experiment_immediately(tmp_path, capsys):
 
     assert status.state == "completed"
     assert (experiment / "stdout.log").read_text(encoding="utf-8") == "planned command ran\n"
+
+
+def test_cli_renders_worker_warning_events_to_stderr(tmp_path, capsys):
+    repository = create_git_repository(tmp_path / "repository-warning", {"train.py": "print('done')\n"})
+    experiment = plan_experiment(
+        PlanRequest(
+            name="warning",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=tmp_path / "reports",
+        )
+    )
+    event = WorkerProgressEvent(
+        phase="warning",
+        experiment=experiment,
+        stdout_log=experiment / "stdout.log",
+        stderr_log=experiment / "stderr.log",
+        stream_output=False,
+        error="Could not release claim: metadata unavailable",
+    )
+
+    print_worker_progress(event)
+
+    assert capsys.readouterr().err == (f"warning: Could not release claim: metadata unavailable: {experiment}\n")
 
 
 def test_worker_cli_prints_effective_arguments_progress_and_summary(tmp_path, capsys):
