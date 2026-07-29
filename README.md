@@ -143,8 +143,8 @@ runforge run --stream-output "$REPO/reports/main/01234567_baseline_0000"
 
 RunForge forwards output as the command emits it. Programs that buffer their
 own output must flush it or enable their own unbuffered mode for timely display.
-Regardless of streaming mode, `run`, `launch`, `retry`, and discovery execution
-print flushed preparation, execution, and final success or failure messages so
+Regardless of streaming mode, `run`, `launch`, `retry`, and `worker` print
+flushed preparation, execution, and final success or failure messages so
 a quiet child process is distinguishable from a stalled CLI. In log-only mode,
 the lifecycle messages also identify the active `stdout.log` and `stderr.log`
 paths.
@@ -269,44 +269,110 @@ line in deterministic path order. Each line includes its state, attempt, name,
 source identifier, and experiment path. A summary reports counts for
 `created`, `init`, `inprogress`, `completed`, `failed`, and invalid candidates.
 
-Without `--execute`, this command is read-only. It does not execute experiments
-or modify their status. Missing or malformed `config.json`/`status.json` pairs
-are reported individually, and the command returns status `2` when any are
-found.
+Discovery is strictly read-only. It never executes commands, changes status,
+creates claims, or waits for another process. Missing or malformed
+`config.json`/`status.json` pairs are reported individually, and the command
+returns status `2` when any are found.
 
-Add `--execute` to run every discovered plan whose status is `created`:
+## Run Multiple Experiments With A Worker
 
-```bash
-runforge discover "$REPORT_ROOT" --execute
-```
-
-The command takes one discovery snapshot, runs eligible experiments
-sequentially in deterministic path order using the normal worker, and continues
-after individual failures. Plans in `init`, `inprogress`, `completed`, or
-`failed` remain visible but are skipped. Plans published after the scan wait
-for the next invocation.
-
-Use `--max-tasks N` with `--execute` to bound one worker invocation. `N` must
-be positive; the command starts at most `N` eligible experiments and reports any
-remaining created plans as deferred. Without `--max-tasks`, all eligible plans
-are attempted. The option is invalid in read-only discovery mode.
-
-By default, child output remains in each experiment's `stdout.log` and
-`stderr.log`. Add `--stream-output` with `--execute` to also show it in the
-console:
+Use `worker` to consume one finite snapshot of runnable experiments:
 
 ```bash
-runforge discover "$REPORT_ROOT" --execute --stream-output
+runforge worker "$REPORT_ROOT"
 ```
 
-The execution summary reports selected, completed, failed, skipped, and invalid
-counts. Exit status is `0` when every selected plan succeeds, `1` when any
-selected plan fails, and `2` when discovery or metadata is invalid. Valid
-created plans are still attempted when another candidate is invalid.
+The worker selects `created` and `init` plans in deterministic path order,
+attempts an atomic claim immediately before each execution, and delegates the
+claimed plan to the existing executor. If another worker already owns a plan,
+it skips that plan. The worker does not poll, rescan, wait, or run as a daemon;
+work published after its snapshot is handled by a later invocation.
 
-This first executor is intended for one controlling process. It does not claim
-plans atomically, so do not run concurrent `discover --execute` processes
-against the same report root.
+Use `--max-tasks` when a temporary node has a limited execution window:
+
+```bash
+runforge worker "$REPORT_ROOT" --max-tasks 2
+```
+
+A positive value limits the number of selected candidates. An omitted option
+means unlimited; zero and negative values are rejected. By default, child output remains
+in each experiment's `stdout.log` and `stderr.log`; add `--stream-output` to
+also show it in the console:
+
+```bash
+runforge worker "$REPORT_ROOT" --max-tasks 2 --stream-output
+```
+
+The worker prints effective arguments, preparation/execution progress, and a
+summary containing candidates, selected, completed, failed, skipped, deferred,
+and invalid counts. It also breaks skipped work down into non-runnable plans,
+claim contention, and plans that became stale after a claim. Exit status is `0` when selected work succeeds, `1` when a
+selected command fails, and `2` when discovery or metadata is invalid.
+
+If a worker is terminated during execution or claim cleanup, its experiment
+may retain an abandoned claim in `inprogress` or `failed` state. After
+independently confirming that the original process has stopped, use the
+explicit recovery path:
+
+```bash
+runforge retry --force "$REPORT_ROOT/BRANCH/EXPERIMENT"
+```
+
+### Identifying A Claim Holder
+
+Ownership itself is decided only by a random token, so the claim also records a
+human-readable owner naming the process to check before forcing recovery.
+Commands that refuse to act on a claimed experiment report it:
+
+```text
+error: Experiment is already claimed: /reports/main/01234567_baseline_0000 (held by node7:48213 since 2026-07-30T09:15:02Z)
+```
+
+The default owner is `HOSTNAME:PID`, which is directly checkable on a native
+Linux host with `ps -p PID` after connecting to that host. Two environments
+need care:
+
+- inside a container, the hostname is an image-local identifier and process ids
+  are namespaced, so the recorded pair usually cannot be resolved from the host;
+  correlate the hostname with `docker ps` instead, or record a scheduler-visible
+  identity; and
+- under a batch scheduler such as Slurm, a job id is far more useful than a pid,
+  because `squeue -j JOBID` answers the liveness question directly.
+
+Set `RUNFORGE_CLAIM_OWNER` in the worker's environment to record an identity
+that is actually resolvable in those environments. Every claim taken by that
+process uses it, including from `runforge worker`:
+
+```bash
+# Slurm batch script
+export RUNFORGE_CLAIM_OWNER="slurm:${SLURM_JOB_ID}"
+runforge worker "$REPORT_ROOT"
+
+# container started by an orchestrator
+docker run -e RUNFORGE_CLAIM_OWNER="pod/${POD_NAME}" ...
+```
+
+The owner resolves from an explicit `try_acquire_claim(experiment, owner=...)`
+argument, then the variable, then `HOSTNAME:PID`. A blank or whitespace-only
+value falls back to the default rather than recording an empty owner. Where the
+default is not resolvable and no override is set, treat the recorded owner as a
+correlation hint and confirm liveness through the scheduler or container runtime
+before using `--force`.
+
+This variable is read, unlike `RUNFORGE_ARTIFACT_DIR` and `RUNFORGE_INPUT_DIR`,
+which RunForge sets for the child command. Its value is printed in error output,
+so do not place secrets in it.
+
+The lightweight worker intentionally has no lease, heartbeat, timeout, or
+automatic stale-task recovery. Persistent lease-aware workers remain a future
+feature.
+
+Multiple workers require a shared filesystem on which all workers see the same
+experiment directories and metadata, and exclusive directory creation is
+atomic and coherent. Verify those guarantees for the filesystem used by your
+deployment, including NFS or SMB configurations; a local POSIX filesystem is
+the reference environment. Use one worker when those guarantees are not
+available.
 
 ## Where To Save Results
 

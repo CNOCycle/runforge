@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import multiprocessing
 from dataclasses import replace
 from pathlib import Path
 
@@ -87,6 +88,51 @@ def test_worker_skips_an_experiment_claimed_by_another_worker(tmp_path):
     assert result.not_runnable == 0
     assert result.claim_contended == 1
     assert result.stale_skipped == 0
+
+
+def _worker_process(root: Path, barrier, results) -> None:
+    barrier.wait()
+    result = run_worker(root)
+    results.put((result.completed, result.failed, result.skipped))
+
+
+def test_two_process_workers_execute_one_experiment_at_most_once(tmp_path):
+    repository = create_git_repository(
+        tmp_path / "repository-race",
+        {
+            "train.py": (
+                "import os\n"
+                "import time\n"
+                "from pathlib import Path\n"
+                "time.sleep(0.2)\n"
+                "Path(os.environ['RUNFORGE_ARTIFACT_DIR']).joinpath('ran.txt').write_text('ran')\n"
+            )
+        },
+    )
+    experiment = plan_experiment(
+        PlanRequest(
+            name="race",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=tmp_path / "reports",
+        )
+    )
+
+    context = multiprocessing.get_context()
+    barrier = context.Barrier(2)
+    results = context.Queue()
+    processes = [
+        context.Process(target=_worker_process, args=(tmp_path / "reports", barrier, results)) for _ in range(2)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=30)
+
+    assert all(process.exitcode == 0 for process in processes)
+    observed = sorted(results.get(timeout=5) for _ in processes)
+    assert observed == [(0, 0, 1), (1, 0, 0)]
+    assert (experiment / "artifacts" / "ran.txt").read_text(encoding="utf-8") == "ran"
 
 
 def test_worker_skips_experiment_that_becomes_non_runnable_after_claim(tmp_path):
