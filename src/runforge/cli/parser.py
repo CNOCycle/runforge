@@ -74,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="archive and rerun one failed or interrupted experiment",
         description=(
             "Archive the previous outputs and immediately rerun one failed experiment. "
-            "An inprogress experiment additionally requires --force."
+            "An inprogress or claimed failed experiment additionally requires --force."
         ),
         formatter_class=SemanticDefaultsHelpFormatter,
     )
@@ -83,7 +83,10 @@ def build_parser() -> argparse.ArgumentParser:
         "-f",
         "--force",
         action="store_true",
-        help="retry an inprogress experiment after independently confirming its worker stopped (default: disabled)",
+        help=(
+            "retry an inprogress or claimed failed experiment after independently confirming its worker stopped "
+            "(default: disabled)"
+        ),
     )
     retry.add_argument("experiment", type=Path, help="failed or interrupted experiment directory to retry")
 

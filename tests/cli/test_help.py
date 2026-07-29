@@ -107,7 +107,7 @@ def test_retry_help_describes_state_policy_and_safe_defaults(capsys):
     output = _single_line(_help(capsys, "retry"))
 
     assert "failed experiment" in output
-    assert "inprogress experiment additionally requires --force" in output
+    assert "inprogress or claimed failed experiment additionally requires --force" in output
     assert "independently confirming its worker stopped (default: disabled)" in output
     assert "stream stdout and stderr while preserving log files (default: disabled)" in output
 

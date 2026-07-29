@@ -10,6 +10,7 @@ import pytest
 import runforge.infrastructure.storage as experiment_storage
 from runforge.execution.retry import RetryError, prepare_retry
 from runforge.execution.worker import run_experiment
+from runforge.infrastructure.claims import try_acquire_claim
 from runforge.infrastructure.json_store import load_json_object, save_json_object
 from runforge.planning.planner import PlanRequest, plan_experiment
 from runforge.schemas.experiment import ExperimentCommand, ExperimentStatus
@@ -53,6 +54,20 @@ def _failed_status(experiment: Path, *, attempt: int = 1) -> ExperimentStatus:
     )
     _save_status(experiment, status)
     return status
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_prepare_retry_of_an_unclaimed_failed_experiment_is_never_reported_as_forced(tmp_path, force):
+    experiment = _experiment(tmp_path)
+    _failed_status(experiment)
+    layout = experiment_storage.ExperimentDirectory.resolve(experiment)
+    assert not layout.claim.exists()
+
+    preparation = prepare_retry(experiment, force=force)
+
+    # Nothing was overridden, so --force must not claim otherwise.
+    assert preparation.forced is False
+    assert preparation.status.state == "init"
 
 
 def test_prepare_retry_archives_failed_attempt_and_preserves_attempt_counter(tmp_path):
@@ -104,6 +119,29 @@ def test_prepare_retry_archives_failed_attempt_and_preserves_attempt_counter(tmp
     assert archive.is_dir()
 
 
+def test_prepare_retry_preserves_claimed_failed_experiment_until_forced(tmp_path):
+    experiment = _experiment(tmp_path)
+    failed = _failed_status(experiment)
+    layout = experiment_storage.ExperimentDirectory.resolve(experiment)
+    claim = try_acquire_claim(layout, owner="stopped-worker")
+    assert claim is not None
+
+    # The operator must be told which process to check before forcing recovery.
+    with pytest.raises(RetryError, match="already claimed.*held by stopped-worker since "):
+        prepare_retry(experiment)
+
+    assert _status(experiment) == failed
+    assert layout.claim.is_dir()
+    assert not tuple(experiment.glob("attempt-*"))
+
+    preparation = prepare_retry(experiment, force=True)
+
+    assert preparation.forced is True
+    assert not layout.claim.exists()
+    assert preparation.status.state == "init"
+    assert (preparation.archive / "status.snapshot.json").is_file()
+
+
 def test_prepare_retry_requires_force_for_inprogress_experiment(tmp_path):
     experiment = _experiment(tmp_path)
     active = ExperimentStatus(
@@ -119,6 +157,12 @@ def test_prepare_retry_requires_force_for_inprogress_experiment(tmp_path):
     with pytest.raises(RetryError, match="force=True"):
         prepare_retry(experiment)
 
+    claim = try_acquire_claim(experiment_storage.ExperimentDirectory.resolve(experiment), owner="dead-worker")
+    assert claim is not None
+    with pytest.raises(RetryError, match="force=True"):
+        prepare_retry(experiment)
+    assert (experiment / "claim").is_dir()
+
     assert _status(experiment) == active
     assert not tuple(experiment.glob("attempt-*"))
     assert (experiment / "stdout.log").read_text(encoding="utf-8") == "partial output\n"
@@ -126,6 +170,7 @@ def test_prepare_retry_requires_force_for_inprogress_experiment(tmp_path):
     preparation = prepare_retry(experiment, force=True)
 
     assert preparation.forced is True
+    assert not (experiment / "claim").exists()
     assert preparation.previous_status == active
     assert preparation.status.state == "init"
     assert preparation.status.attempt == ACTIVE_ATTEMPT

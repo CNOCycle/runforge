@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import uuid
 from dataclasses import dataclass
@@ -139,3 +140,15 @@ def release_claim(experiment: ExperimentDirectory, claim: ExperimentClaim) -> No
         experiment.claim.rmdir()
     except OSError as error:
         raise ClaimError(f"Could not release claim for {experiment.root}: {error}") from error
+
+
+def clear_claim(experiment: ExperimentDirectory) -> None:
+    """Remove an abandoned claim after the operator has confirmed its owner stopped."""
+    if not experiment.claim.exists():
+        return
+    if experiment.claim.is_symlink() or not experiment.claim.is_dir():
+        raise ClaimError(f"Claim path is not a directory: {experiment.claim}")
+    try:
+        shutil.rmtree(experiment.claim)
+    except OSError as error:
+        raise ClaimError(f"Could not clear claim for {experiment.root}: {error}") from error

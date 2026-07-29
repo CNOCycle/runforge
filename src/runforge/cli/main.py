@@ -66,7 +66,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             preparation = prepare_retry(arguments.experiment, force=arguments.force)
             if preparation.forced:
                 print(
-                    "warning: Forced retry cannot prove that the previous inprogress worker has stopped",
+                    "warning: Forced retry cannot prove that the previous worker has stopped",
                     file=sys.stderr,
                     flush=True,
                 )

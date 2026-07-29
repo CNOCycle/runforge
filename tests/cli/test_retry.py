@@ -106,6 +106,20 @@ def test_retry_archives_failed_attempt_prints_effective_arguments_and_executes(t
     assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "success"
 
 
+def test_retry_force_on_an_unclaimed_failed_experiment_does_not_warn(tmp_path, capsys):
+    repository = create_git_repository(tmp_path / "repository", {"train.py": "raise SystemExit(7)\n"})
+    environment_file = tmp_path / "runforge.env"
+    environment_file.write_text("MARKER=unused\n", encoding="utf-8")
+    experiment = _plan(repository, tmp_path / "reports", environment_file, capsys)
+    assert main(["run", str(experiment)]) == FAILURE_EXIT_CODE
+    capsys.readouterr()
+
+    assert main(["retry", "--force", str(experiment)]) == FAILURE_EXIT_CODE
+
+    # No claim existed and the state was already retryable, so nothing was forced.
+    assert "cannot prove" not in capsys.readouterr().err
+
+
 def test_retry_requires_force_for_inprogress_and_warns_before_execution(tmp_path, capsys):
     repository = _repository(tmp_path, "print('forced retry ran', flush=True)\n")
     environment_file = tmp_path / "runforge.env"
@@ -139,9 +153,7 @@ def test_retry_requires_force_for_inprogress_and_warns_before_execution(tmp_path
     assert "  next attempt: 3" in captured.out
     assert f"Previous attempt archived at: {archive}" in captured.out
     assert "forced retry ran" in captured.out
-    assert captured.err.splitlines() == [
-        "warning: Forced retry cannot prove that the previous inprogress worker has stopped"
-    ]
+    assert captured.err.splitlines() == ["warning: Forced retry cannot prove that the previous worker has stopped"]
     assert _status(experiment).state == "completed"
     assert _status(experiment).attempt == RETRIED_ACTIVE_ATTEMPT
     assert (archive / "stdout.log").read_text(encoding="utf-8") == "partial output\n"
