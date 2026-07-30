@@ -24,21 +24,13 @@ artifacts.
 
 ## Project Structure
 
-The Python package is grouped by responsibility:
-
 ```text
 src/runforge/
-  cli/             # argparse tree, request translation, output, and dispatch
-  schemas/         # versioned experiment and source data contracts
-  planning/        # source resolution, matrices, and plan publication
-  execution/       # discovery, retry, and worker execution
-  infrastructure/  # experiment storage, Git, atomic JSON, and clock access
+  cli/  schemas/  planning/  execution/  infrastructure/
 ```
 
-The test tree mirrors these packages. Standard experiment filenames and typed
-configuration/status persistence are centralized in `ExperimentDirectory`, so
-planning, execution, discovery, retry, and CLI summaries share one on-disk
-storage definition.
+Dependencies flow `cli -> planning/execution -> schemas/infrastructure`. See
+[Architecture and workflows](docs/architecture/architecture-and-workflows.md).
 
 ## Install
 
