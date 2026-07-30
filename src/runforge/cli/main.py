@@ -12,6 +12,7 @@ from runforge.cli.output import (
     path_text,
     print_discover_arguments,
     print_discovery,
+    print_matrix_mapping,
     print_planning_arguments,
     print_retry_arguments,
     print_run_arguments,
@@ -24,6 +25,7 @@ from runforge.cli.requests import matrix_request, planning_request
 from runforge.execution.discovery import DiscoveryError, discover_experiments
 from runforge.execution.retry import RetryError, prepare_retry
 from runforge.execution.worker import WorkerError, run_experiment, run_worker
+from runforge.planning.matrix_mapping import build_matrix_mapping
 from runforge.planning.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
 
 
@@ -67,6 +69,7 @@ def _run_matrix_command(arguments: argparse.Namespace) -> int:
         ),
     )
     experiments = _plan_matrix_with_warnings(request)
+    print_matrix_mapping(build_matrix_mapping(experiments))
     print(f"Experiment plans created ({len(experiments)}):", flush=True)
     for experiment in experiments:
         print(f"  {experiment}", flush=True)

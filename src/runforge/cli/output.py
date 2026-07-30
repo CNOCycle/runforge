@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shlex
 import sys
 from collections import Counter
@@ -14,6 +15,7 @@ from runforge.execution.discovery import DiscoveryResult
 from runforge.execution.worker import WorkerProgressEvent, WorkerResult
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.infrastructure.storage import ExperimentDirectory
+from runforge.planning.matrix_mapping import MatrixMapping
 from runforge.planning.planner import PlanRequest
 from runforge.schemas.directory_source import DirectorySnapshotSource, VerifiedDirectorySource
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
@@ -21,6 +23,29 @@ from runforge.schemas.source import GitSource
 
 
 _DISCOVERY_STATES = ("created", "init", "inprogress", "completed", "failed")
+
+
+def print_matrix_mapping(mapping: MatrixMapping) -> None:
+    """Print one row per matrix directory with one column per parameter."""
+    headers = ("index", "dir_name", *mapping.parameters)
+    rows = tuple(
+        (
+            f"{row.index:04d}",
+            row.dir_name,
+            *(matrix_value_text(row.parameters.get(name)) for name in mapping.parameters),
+        )
+        for row in mapping.rows
+    )
+    print("Matrix configuration mapping:")
+    if not rows:
+        print("  no matrix rows recorded")
+        return
+    # max() over a single list keeps an empty column set from degenerating.
+    widths = [max([len(header), *(len(row[column]) for row in rows)]) for column, header in enumerate(headers)]
+    print(" | ".join(header.ljust(widths[column]) for column, header in enumerate(headers)))
+    print("-+-".join("-" * width for width in widths))
+    for row in rows:
+        print(" | ".join(value.ljust(widths[column]) for column, value in enumerate(row)))
 
 
 def print_discovery(result: DiscoveryResult) -> None:
@@ -181,6 +206,11 @@ def print_worker_progress(event: WorkerProgressEvent) -> None:
     else:
         message = f"Experiment failed{task}: {event.experiment}: {event.error}"
     _worker_print(message, file=sys.stderr)
+
+
+def matrix_value_text(value: object) -> str:
+    """Render one matrix value so a string stays distinguishable from a number."""
+    return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
 
 
 def command_text(command: ExperimentCommand) -> str:

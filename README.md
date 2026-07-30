@@ -233,6 +233,27 @@ untracked-file warning) across every combination, validates every combination
 before publication, and does not execute any experiment. Use
 `runforge run EXPERIMENT_DIRECTORY` for each resulting plan.
 
+### Matrix Configuration Mapping
+
+Directory names identify a matrix combination by position, not by value, so
+`matrix` also prints a table relating each generated directory to the parameters
+it received:
+
+```text
+Matrix configuration mapping:
+index | dir_name          | LR    | SEED
+------+-------------------+-------+-----
+0000  | a9f2ee3c_exp_0000 | 0.001 | 1
+0001  | a9f2ee3c_exp_0001 | 0.001 | 2
+0002  | a9f2ee3c_exp_0002 | 0.01  | 1
+0003  | a9f2ee3c_exp_0003 | 0.01  | 2
+```
+
+Rows follow planning order, and parameter columns follow the same sorted axis
+order used to expand the matrix. Values keep their JSON types, so a string
+parameter is quoted and a number is not; this distinguishes the string `"1"`
+from the number `1`.
+
 ## Non-Git Directory Sources
 
 `--source-mode verified-directory` and `--source-mode directory-snapshot` plan
