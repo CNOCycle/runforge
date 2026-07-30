@@ -316,7 +316,7 @@ source tree into the experiment directory at plan time, so the original
 directory can be moved or deleted afterward. Both support `matrix` the same
 way Git sources do, sharing one validated source identity across every
 combination. See the
-[non-Git sources guide](docs/guides/non-git-sources.md) for the full
+[non-Git source modes](#non-git-directory-sources) for the full
 contract, ignore rules, and layout.
 
 ## Discover Planned Experiments
@@ -544,7 +544,7 @@ REPORT_ROOT/
 `snapshot/` report bands keyed by the source's full-tree digest instead of a
 Git branch and commit, and store `source-manifest.json` (plus a captured
 `source/` tree for `directory-snapshot`) instead of `git.patch`. See the
-[non-Git sources guide](docs/guides/non-git-sources.md) for that layout.
+[non-Git source modes](#non-git-directory-sources) for that layout.
 
 The lifecycle is `created -> init -> inprogress -> completed|failed`.
 
