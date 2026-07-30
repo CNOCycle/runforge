@@ -274,6 +274,13 @@ creates claims, or waits for another process. Missing or malformed
 `config.json`/`status.json` pairs are reported individually, and the command
 returns status `2` when any are found.
 
+Discovery only reports fully published plans. Planning builds each experiment in
+a dot-prefixed staging directory inside the report root and renames it into place
+once complete, and discovery skips dot-prefixed directories, so a scan never
+returns a plan that is still being written. Planning into a report root while
+workers are consuming it is therefore safe: a plan becomes visible when it is
+complete, and plans published after a worker's scan wait for a later invocation.
+
 ## Run Multiple Experiments With A Worker
 
 Use `worker` to consume one finite snapshot of runnable experiments:
