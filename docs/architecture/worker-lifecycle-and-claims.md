@@ -23,6 +23,30 @@ candidates exhausted or --max-tasks reached
 print summary and exit
 ```
 
+```mermaid
+flowchart TD
+    Scan[Scan report root once] --> Candidates{Runnable created/init candidates?}
+    Candidates -- No --> Summary[Print summary and exit]
+    Candidates -- Yes --> Select[Select next candidate]
+    Select --> Claim{Atomic claim succeeds?}
+    Claim -- Contended --> SkipContention[Count claim contention] --> More{More candidates?}
+    Claim -- Error --> FailedClaim[Count failed and warn] --> More
+    Claim -- Acquired --> Reread[Reread status]
+    Reread --> Runnable{Still runnable?}
+    Runnable -- No --> ReleaseStale[Release claim and count stale-after-claim] --> More
+    Runnable -- Yes --> Verify{Source and input verification passes?}
+    Verify -- No --> RecordFailure[Record failed status] --> Release
+    Verify -- Yes --> Execute[Execute command]
+    Execute --> Save[Save result with claim fencing]
+    Save --> Release[Release claim] --> More
+    More -- Yes --> Select
+    More -- No --> Summary
+```
+
+The diagram shows why a worker can safely share one report root with peers:
+claim creation is the ownership boundary, and status writes are fenced by the
+claim token.
+
 There is no final rescan, idle scan, poll interval, pending queue, or wait for
 other workers. Work created after the snapshot belongs to a later invocation.
 
