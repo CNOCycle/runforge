@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import runforge.execution.retry as retry_module
 import runforge.infrastructure.storage as experiment_storage
 from runforge.execution.retry import RetryError, prepare_retry
 from runforge.execution.worker import run_experiment
@@ -250,3 +251,26 @@ def test_prepare_retry_rolls_back_outputs_when_status_reset_fails(tmp_path, monk
     assert (experiment / "stderr.log").read_text(encoding="utf-8") == "err\n"
     assert (experiment / "artifacts" / "partial.txt").read_text(encoding="utf-8") == "partial"
     assert not tuple(experiment.glob("attempt-*"))
+
+
+def test_archive_rejects_a_dangling_history_symlink(tmp_path):
+    """A dangling symlink occupies the path while reporting exists() as false.
+
+    prepare_retry cannot reach this today, because the history directory is the
+    experiment directory and that is validated earlier. The guard is exercised
+    directly so a later change to that earlier validation cannot silently leave
+    mkdir() to fail with a less specific error.
+    """
+    experiment = tmp_path / "experiment"
+    experiment.mkdir()
+    history = tmp_path / "dangling"
+    history.symlink_to(tmp_path / "missing")
+    status = ExperimentStatus(state="failed", attempt=1, updated_at="2026-01-01T00:00:00Z")
+
+    with pytest.raises(RetryError, match="Retry history path is not a directory"):
+        retry_module._archive_and_reset(
+            experiment_storage.ExperimentDirectory(experiment),
+            history / "attempt-0001",
+            status,
+            status,
+        )

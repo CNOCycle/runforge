@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 
 from runforge.infrastructure.json_store import load_json_object
+from runforge.infrastructure.paths import is_safe_directory
 from runforge.planning.inputs import InputTemplate
 from runforge.planning.planner import MatrixPlanRequest, PlanningError, PlanRequest
 from runforge.schemas.experiment import ExperimentCommand
@@ -93,7 +94,7 @@ def _input_templates(root: Path | None) -> tuple[InputTemplate, ...]:
     if root is None:
         return ()
     root = root.expanduser()
-    if root.is_symlink() or not root.is_dir():
+    if not is_safe_directory(root):
         raise PlanningError(f"Input tree must be a non-symlink directory: {root}")
     templates: list[InputTemplate] = []
     for path in sorted(root.rglob("*")):

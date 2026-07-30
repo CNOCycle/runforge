@@ -26,6 +26,7 @@ from runforge.infrastructure.claims import (
 from runforge.infrastructure.clock import utc_now
 from runforge.infrastructure.directory_scan import DirectoryScanError, ScannedFile, scan_directory
 from runforge.infrastructure.git import GitOperationError, GitRepository
+from runforge.infrastructure.paths import is_safe_directory
 from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.schemas.directory_source import (
     DirectorySnapshotSource,
@@ -434,7 +435,7 @@ def _run_in_working_directory(
 
 def _verify_verified_directory_source(experiment: ExperimentDirectory, source: VerifiedDirectorySource) -> None:
     """Reject a missing, moved, or changed verified-directory source before execution."""
-    if source.path.is_symlink() or not source.path.is_dir():
+    if not is_safe_directory(source.path):
         raise WorkerError(f"Verified-directory source is missing or not a directory: {source.path}")
     _verify_directory_matches_manifest(
         experiment,
@@ -448,7 +449,7 @@ def _verify_verified_directory_source(experiment: ExperimentDirectory, source: V
 def _verify_directory_snapshot_source(experiment: ExperimentDirectory, source: DirectorySnapshotSource) -> None:
     """Reject a missing, expanded, or changed captured directory-snapshot before execution."""
     snapshot_dir = experiment.snapshot_source_directory
-    if snapshot_dir.is_symlink() or not snapshot_dir.is_dir():
+    if not is_safe_directory(snapshot_dir):
         raise WorkerError(f"Captured directory-snapshot source is missing: {snapshot_dir}")
     _verify_directory_matches_manifest(
         experiment,

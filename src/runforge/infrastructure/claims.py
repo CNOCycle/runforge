@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from runforge.infrastructure.clock import utc_now
 from runforge.infrastructure.json_store import JsonStoreError, load_json_object, save_json_object
+from runforge.infrastructure.paths import is_safe_directory
 from runforge.infrastructure.storage import ExperimentDirectory
 
 
@@ -146,7 +147,7 @@ def clear_claim(experiment: ExperimentDirectory) -> None:
     """Remove an abandoned claim after the operator has confirmed its owner stopped."""
     if not experiment.claim.exists():
         return
-    if experiment.claim.is_symlink() or not experiment.claim.is_dir():
+    if not is_safe_directory(experiment.claim):
         raise ClaimError(f"Claim path is not a directory: {experiment.claim}")
     try:
         shutil.rmtree(experiment.claim)
