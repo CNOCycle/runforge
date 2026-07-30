@@ -22,11 +22,20 @@ parameters, environment overrides, initial status, and reproduction helpers. A
 **worker** reconstructs one explicit plan, runs it, and updates status, logs, and
 artifacts.
 
+## Documentation
+
+[Guides, reference, architecture, and operations](docs/README.md) — start here
+once you have run your first experiment.
+
 ## Project Structure
 
 ```text
 src/runforge/
-  cli/  schemas/  planning/  execution/  infrastructure/
+  cli/             # parser construction, requests, output, dispatch
+  schemas/         # versioned experiment and source data contracts
+  planning/        # matrix expansion and plan publication
+  execution/       # discovery, retry, and worker execution
+  infrastructure/  # storage, Git, directory scanning, JSON, claims, and clock
 ```
 
 Dependencies flow `cli -> planning/execution -> schemas/infrastructure`. See
@@ -235,56 +244,38 @@ below `RUNFORGE_ARTIFACT_DIR`. See
 
 ## Planned Configuration Inputs
 
-Some programs receive output paths and downstream checkpoint locations through
-configuration files rather than command arguments. Use `--input-tree` to
-capture a configuration directory as immutable per-experiment inputs. JSON
-files render structurally; YAML, YML, and INI files render as text while
-preserving their layout and comments, then receive syntax validation. All
-templated formats support
-`{ARTIFACT_DIR}`, `{INPUT_DIR}`, and matrix parameters.
+When a program is driven by JSON, YAML, or INI files rather than flags, capture
+that directory as immutable per-experiment inputs:
 
 ```bash
-runforge launch \
-  --name train-evaluate \
-  --source-path "$REPO" \
-  --input-tree "$REPO/configs" \
-  --shell -- \
-  "python train.py '{INPUT_DIR}/train.json' && python evaluate.py '{INPUT_DIR}/eval.json'"
+runforge launch --name train-evaluate --source-path "$REPO" --input-tree "$REPO/configs" -- python run_pipeline.py '{INPUT_DIR}/train.json' '{INPUT_DIR}/eval.json'
 ```
 
-The detailed
-[planned configuration inputs guide](docs/guides/planned-configuration-inputs.md)
-shows how linked training and evaluation files share one artifact layout.
+See [Planned configuration inputs](docs/guides/planned-configuration-inputs.md).
 
 ## Advanced: Environment Overrides
 
-Most runs can skip this. Use an environment file when the experiment needs
-explicit machine-specific variables:
-
-```text
-# runforge.env
-RUN_MODE=ablation
-CUDA_VISIBLE_DEVICES=0
-```
+Most runs can skip this. Pass explicit machine-specific values with
+`--env-file`; only those are stored in `config.json`, and the ambient
+environment is never serialized.
 
 ```bash
-runforge plan \
-  --name gpu-baseline \
-  --out-dir "$REPORT_ROOT" \
-  --source-path "$REPO" \
-  --env-file runforge.env \
-  -- python train.py --output '{ARTIFACT_DIR}'
+runforge plan --name gpu-baseline --out-dir "$REPORT_ROOT" --source-path "$REPO" --env-file runforge.env -- python train.py --output '{ARTIFACT_DIR}'
 ```
 
-Only values in `--env-file` are stored in `config.json`; the ambient process
-environment is not serialized.
+See [Dynamic environment variables](docs/guides/dynamic-environment-variables.md)
+for values that cannot be known until run time.
 
 ## Experiment Layout
 
 ```text
 REPORT_ROOT/BRANCH_SLUG/COMMIT8_NAME_SLUG_COUNT/
-  config.json   status.json   cmd.sh
-  stdout.log    stderr.log    artifacts/
+  config.json
+  status.json
+  cmd.sh
+  stdout.log
+  stderr.log
+  artifacts/
 ```
 
 The lifecycle is `created -> init -> inprogress -> completed|failed`. See

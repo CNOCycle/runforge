@@ -90,3 +90,16 @@ def test_every_public_subcommand_is_documented():
     missing = sorted(name for name in subcommands if f"runforge {name}" not in documented)
 
     assert missing == [], f"subcommands with no documented example: {missing}"
+
+
+def test_every_documentation_page_is_linked_from_the_index():
+    """A page nobody links to is a page nobody reads."""
+    index = DOCUMENTATION_ROOT / "README.md"
+    linked = {
+        (index.parent / target.split("#", 1)[0]).resolve()
+        for target in _MARKDOWN_LINK.findall(index.read_text(encoding="utf-8"))
+        if not target.startswith(("http://", "https://", "#", "mailto:"))
+    }
+    pages = {path.resolve() for path in _documentation_files() if path not in {README, index}}
+
+    assert sorted(page.name for page in pages - linked) == []
