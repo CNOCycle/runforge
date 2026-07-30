@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from runforge.cli import main
+from runforge.cli.output import print_worker_progress
+from runforge.execution.worker import WorkerProgressEvent
 from runforge.infrastructure.json_store import load_json_object, save_json_object
-from runforge.schemas.experiment import ExperimentConfiguration, ExperimentStatus
+from runforge.planning.planner import PlanRequest, plan_experiment
+from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from tests.support import create_git_repository, git, planned_path
 
 
@@ -48,11 +52,21 @@ def test_cli_plans_and_runs_one_explicit_experiment(tmp_path, capsys):
     assert experiment.is_dir()
     assert main(["run", "--stream-output", str(experiment)]) == 0
     output = capsys.readouterr().out
-    assert f"Preparing experiment: {experiment}" in output
+    assert re.search(
+        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Preparing experiment: "
+        rf"{re.escape(str(experiment))}$",
+        output,
+        re.MULTILINE,
+    )
     assert "Executing command: python train.py" in output
     assert "  output mode: streaming and logging" in output
     assert "planned command ran" in output
-    assert f"Experiment completed with exit code 0: {experiment}" in output
+    assert re.search(
+        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Experiment completed with exit code 0: "
+        rf"{re.escape(str(experiment))}$",
+        output,
+        re.MULTILINE,
+    )
 
 
 def test_cli_rejects_missing_command(capsys):
@@ -237,11 +251,125 @@ def test_cli_launches_a_new_experiment_immediately(tmp_path, capsys):
     experiment = planned_path(output)
     assert "RunForge launch effective arguments:" in output
     assert "  stream output: enabled" in output
-    assert f"Preparing experiment: {experiment}" in output
+    assert re.search(
+        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Preparing experiment: "
+        rf"{re.escape(str(experiment))}$",
+        output,
+        re.MULTILINE,
+    )
     assert "Executing command: python train.py" in output
     assert "planned command ran" in output
-    assert f"Experiment completed with exit code 0: {experiment}" in output
+    assert re.search(
+        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Experiment completed with exit code 0: "
+        rf"{re.escape(str(experiment))}$",
+        output,
+        re.MULTILINE,
+    )
     status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
 
     assert status.state == "completed"
     assert (experiment / "stdout.log").read_text(encoding="utf-8") == "planned command ran\n"
+
+
+def test_cli_renders_worker_warning_events_to_stderr(tmp_path, capsys):
+    repository = create_git_repository(tmp_path / "repository-warning", {"train.py": "print('done')\n"})
+    experiment = plan_experiment(
+        PlanRequest(
+            name="warning",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=tmp_path / "reports",
+        )
+    )
+    event = WorkerProgressEvent(
+        phase="warning",
+        experiment=experiment,
+        stdout_log=experiment / "stdout.log",
+        stderr_log=experiment / "stderr.log",
+        stream_output=False,
+        error="Could not release claim: metadata unavailable",
+    )
+
+    print_worker_progress(event)
+
+    warning_output = capsys.readouterr().err
+    assert re.search(
+        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] warning: "
+        rf"Could not release claim: metadata unavailable: {re.escape(str(experiment))}$",
+        warning_output,
+        re.MULTILINE,
+    )
+
+
+def test_worker_cli_prints_effective_arguments_progress_and_summary(tmp_path, capsys):
+    repository = create_git_repository(tmp_path / "repository", {"train.py": "print('worker output', flush=True)\n"})
+    reports = tmp_path / "reports"
+    plan_experiment(
+        PlanRequest(
+            name="worker-cli",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=reports,
+        )
+    )
+
+    assert main(["worker", str(reports), "--max-tasks", "1"]) == 0
+
+    output = capsys.readouterr().out
+    assert re.search(r"^\[\d{4}-\d{2}-\d{2}T[^]]+Z\] RunForge worker effective arguments:$", output, re.MULTILINE)
+    assert f"  root: {reports.resolve()}" in output
+    assert "  max tasks: 1" in output
+    assert "  stream output: disabled" in output
+    assert re.search(r"Preparing experiment \[1/1\]:", output)
+    assert "Executing command [1/1]: python train.py" in output
+    assert "Experiment completed with exit code 0 [1/1]:" in output
+    assert "Worker summary:" in output
+    assert "  candidates: 1" in output
+    assert "  selected: 1" in output
+    assert "  completed: 1" in output
+    assert "  failed: 0" in output
+    assert "  skipped: 0" in output
+    assert "    non-runnable: 0" in output
+    assert "    claim contention: 0" in output
+    assert "    stale after claim: 0" in output
+    assert "  deferred: 0" in output
+    assert "  invalid: 0" in output
+
+
+def _plan_worker_experiment(tmp_path: Path, reports: Path, name: str, script: str) -> Path:
+    repository = create_git_repository(tmp_path / f"repository-{name}", {"train.py": script})
+    return plan_experiment(
+        PlanRequest(
+            name=name,
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=reports,
+        )
+    )
+
+
+def test_worker_cli_returns_one_when_a_selected_command_fails(tmp_path, capsys):
+    reports = tmp_path / "reports"
+    _plan_worker_experiment(tmp_path, reports, "failing", "raise SystemExit(7)\n")
+
+    assert main(["worker", str(reports)]) == 1
+
+    output = capsys.readouterr().out
+    assert re.search(r"^\[\d{4}-\d{2}-\d{2}T[^]]+Z\]   completed: 0$", output, re.MULTILINE)
+    assert re.search(r"^\[\d{4}-\d{2}-\d{2}T[^]]+Z\]   failed: 1$", output, re.MULTILINE)
+    assert "  invalid: 0" in output
+
+
+def test_worker_cli_reports_invalid_metadata_ahead_of_a_failed_command(tmp_path, capsys):
+    reports = tmp_path / "reports"
+    _plan_worker_experiment(tmp_path, reports, "failing", "raise SystemExit(7)\n")
+    broken = _plan_worker_experiment(tmp_path, reports, "broken", "print('never runs')\n")
+    (broken / "config.json").write_text("{ not json\n", encoding="utf-8")
+
+    # Invalid metadata outranks a failed command: 2 means the scan itself is untrustworthy,
+    # so a caller testing for 1 must not conclude that every candidate was inspected.
+    assert main(["worker", str(reports)]) == CLI_ERROR_EXIT
+
+    output = capsys.readouterr().out
+    assert re.search(r"^\[\d{4}-\d{2}-\d{2}T[^]]+Z\]   failed: 1$", output, re.MULTILINE)
+    assert "  invalid: 1" in output

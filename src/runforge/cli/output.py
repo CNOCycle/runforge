@@ -7,10 +7,11 @@ import shlex
 import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 
 from runforge.execution.discovery import DiscoveryResult
-from runforge.execution.worker import WorkerProgressEvent
+from runforge.execution.worker import WorkerProgressEvent, WorkerResult
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.planning.planner import PlanRequest
@@ -120,40 +121,66 @@ def print_retry_arguments(arguments: argparse.Namespace) -> None:
 
 
 def print_discover_arguments(arguments: argparse.Namespace) -> None:
-    """Print effective arguments for discovery list or execution mode."""
+    """Print the effective root for read-only discovery."""
+    _print_effective_arguments("discover", [("root", path_text(arguments.root))])
+
+
+def print_worker_arguments(arguments: argparse.Namespace) -> None:
+    """Print effective arguments for one finite shared-worker invocation."""
+    max_tasks = arguments.max_tasks
+    effective_limit = "unlimited" if max_tasks is None else str(max_tasks)
     _print_effective_arguments(
-        "discover",
+        "worker",
         [
             ("root", path_text(arguments.root)),
-            ("execute", boolean_text(arguments.execute)),
-            ("max tasks", str(arguments.max_tasks) if arguments.max_tasks is not None else "unlimited"),
+            ("max tasks", effective_limit),
             ("stream output", boolean_text(arguments.stream_output)),
         ],
+        timestamp=True,
     )
+
+
+def print_worker_summary(result: WorkerResult) -> None:
+    """Print the counts from one finite shared-worker invocation."""
+    _worker_print("Worker summary:")
+    _worker_print(f"  candidates: {result.candidates}")
+    _worker_print(f"  selected: {result.selected}")
+    _worker_print(f"  completed: {result.completed}")
+    _worker_print(f"  failed: {result.failed}")
+    _worker_print(f"  skipped: {result.skipped}")
+    _worker_print(f"    non-runnable: {result.not_runnable}")
+    _worker_print(f"    claim contention: {result.claim_contended}")
+    _worker_print(f"    stale after claim: {result.stale_skipped}")
+    _worker_print(f"  deferred: {result.deferred}")
+    _worker_print(f"  invalid: {result.invalid}")
 
 
 def print_worker_progress(event: WorkerProgressEvent) -> None:
     """Print one worker lifecycle event without changing worker behavior."""
+    task = f" [{event.task_index}/{event.task_total}]" if event.task_index is not None else ""
     if event.phase == "preparing":
-        print(f"Preparing experiment: {event.experiment}", flush=True)
+        _worker_print(f"Preparing experiment{task}: {event.experiment}")
         return
     if event.phase == "executing":
         command = command_text(event.command) if event.command is not None else "not available"
-        print(f"Executing command: {command}", flush=True)
+        _worker_print(f"Executing command{task}: {command}")
         if event.stream_output:
-            print("  output mode: streaming and logging", flush=True)
+            _worker_print("  output mode: streaming and logging")
         else:
-            print(f"  stdout log: {event.stdout_log}", flush=True)
-            print(f"  stderr log: {event.stderr_log}", flush=True)
+            _worker_print(f"  stdout log: {event.stdout_log}")
+            _worker_print(f"  stderr log: {event.stderr_log}")
         return
     if event.phase == "completed":
-        print(f"Experiment completed with exit code {event.exit_code}: {event.experiment}", flush=True)
+        _worker_print(f"Experiment completed with exit code {event.exit_code}{task}: {event.experiment}")
+        return
+    if event.phase == "warning":
+        _worker_print(f"warning: {event.error}: {event.experiment}", file=sys.stderr)
         return
     if event.exit_code is not None:
-        message = f"Experiment failed with exit code {event.exit_code}: {event.experiment}"
+        message = f"Experiment failed with exit code {event.exit_code}{task}: {event.experiment}"
     else:
-        message = f"Experiment failed: {event.experiment}: {event.error}"
-    print(message, file=sys.stderr, flush=True)
+        message = f"Experiment failed{task}: {event.experiment}: {event.error}"
+    _worker_print(message, file=sys.stderr)
 
 
 def command_text(command: ExperimentCommand) -> str:
@@ -173,10 +200,21 @@ def boolean_text(value: bool) -> str:
     return "enabled" if value else "disabled"
 
 
-def _print_effective_arguments(subcommand: str, rows: Sequence[tuple[str, str]]) -> None:
-    print(f"RunForge {subcommand} effective arguments:", flush=True)
+def _print_effective_arguments(
+    subcommand: str,
+    rows: Sequence[tuple[str, str]],
+    *,
+    timestamp: bool = False,
+) -> None:
+    printer = _worker_print if timestamp else print
+    printer(f"RunForge {subcommand} effective arguments:")
     for label, value in rows:
-        print(f"  {label}: {value}", flush=True)
+        printer(f"  {label}: {value}")
+
+
+def _worker_print(message: str, *, file: object | None = None) -> None:
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    print(f"[{timestamp}] {message}", file=sys.stdout if file is None else file, flush=True)
 
 
 def _configuration_for_summary(layout: ExperimentDirectory) -> ExperimentConfiguration | None:

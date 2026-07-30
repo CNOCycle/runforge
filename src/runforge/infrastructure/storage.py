@@ -27,6 +27,8 @@ COMMAND_FILE = "cmd.sh"
 ARTIFACTS_DIRECTORY = "artifacts"
 STDOUT_LOG_FILE = "stdout.log"
 STDERR_LOG_FILE = "stderr.log"
+CLAIM_DIRECTORY = "claim"
+CLAIM_FILE = "owner.json"
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,16 @@ class ExperimentDirectory:
     @property
     def stderr_log(self) -> Path:
         return self.root / STDERR_LOG_FILE
+
+    @property
+    def claim(self) -> Path:
+        """Return the exclusive shared-execution claim directory."""
+        return self.root / CLAIM_DIRECTORY
+
+    @property
+    def claim_file(self) -> Path:
+        """Return the persisted owner metadata inside the claim directory."""
+        return self.claim / CLAIM_FILE
 
     def source_file(self, filename: str) -> Path:
         """Return a source payload path previously validated as a filename."""

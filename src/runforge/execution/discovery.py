@@ -54,7 +54,14 @@ def discover_experiments(root: Path = Path(".")) -> DiscoveryResult:
         walker = os.walk(discovery_root, topdown=True, onerror=record_walk_error, followlinks=False)
         for current_text, directory_names, file_names in walker:
             current = Path(current_text)
-            directory_names[:] = sorted(name for name in directory_names if not (current / name).is_symlink())
+            # Dot-prefixed directories are never published plans. Planning builds each
+            # plan in ".NAME.tmp-UUID" inside the report root before renaming it into
+            # place, and that staging tree already holds config.json and status.json.
+            # Descending into it would let a worker claim and execute an unpublished
+            # plan that publication may still rename or delete.
+            directory_names[:] = sorted(
+                name for name in directory_names if not name.startswith(".") and not (current / name).is_symlink()
+            )
             names = set(file_names)
             if CONFIGURATION_FILE in names or STATUS_FILE in names:
                 candidates.append(current.resolve())

@@ -13,9 +13,9 @@ def _positive_integer(value: str) -> int:
     try:
         parsed = int(value)
     except ValueError as error:
-        raise argparse.ArgumentTypeError("must be an integer") from error
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
     if parsed <= 0:
-        raise argparse.ArgumentTypeError("must be greater than zero")
+        raise argparse.ArgumentTypeError("must be a positive integer")
     return parsed
 
 
@@ -85,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="archive and rerun one failed or interrupted experiment",
         description=(
             "Archive the previous outputs and immediately rerun one failed experiment. "
-            "An inprogress experiment additionally requires --force."
+            "An inprogress or claimed failed experiment additionally requires --force."
         ),
         formatter_class=SemanticDefaultsHelpFormatter,
     )
@@ -94,16 +94,17 @@ def build_parser() -> argparse.ArgumentParser:
         "-f",
         "--force",
         action="store_true",
-        help="retry an inprogress experiment after independently confirming its worker stopped (default: disabled)",
+        help=(
+            "retry an inprogress or claimed failed experiment after independently confirming its worker stopped "
+            "(default: disabled)"
+        ),
     )
     retry.add_argument("experiment", type=Path, help="failed or interrupted experiment directory to retry")
 
     discover = subparsers.add_parser(
         "discover",
-        help="list or sequentially execute planned experiments recursively",
-        description=(
-            "Recursively inspect planned experiments. The default mode only lists status; execution requires --execute."
-        ),
+        help="list planned experiments recursively",
+        description="Recursively inspect planned experiments without changing status or executing commands.",
         formatter_class=SemanticDefaultsHelpFormatter,
     )
     discover.add_argument(
@@ -113,18 +114,31 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("."),
         help="directory to scan recursively (default: current directory)",
     )
-    discover.add_argument(
-        "--execute",
-        action="store_true",
-        help="run created experiments sequentially after discovery (default: disabled; list only)",
+
+    worker = subparsers.add_parser(
+        "worker",
+        help="execute available experiments from one report root",
+        description=(
+            "Execute created and initialized experiments from one discovery snapshot, "
+            "using an atomic claim before each existing executor run."
+        ),
+        formatter_class=SemanticDefaultsHelpFormatter,
     )
-    discover.add_argument(
+    worker.add_argument(
+        "root",
+        type=Path,
+        nargs="?",
+        default=Path("."),
+        help="report root to scan once (default: current directory)",
+    )
+    worker.add_argument(
+        "-n",
         "--max-tasks",
         type=_positive_integer,
         metavar="N",
-        help="maximum number of experiments to launch with --execute (default: unlimited; requires --execute)",
+        help="maximum experiments to execute (default: unlimited; must be positive when set)",
     )
-    _add_stream_output_argument(discover)
+    _add_stream_output_argument(worker)
     return parser
 
 

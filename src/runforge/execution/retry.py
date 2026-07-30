@@ -7,6 +7,7 @@ import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from runforge.infrastructure.claims import ClaimError, clear_claim, describe_claim_holder
 from runforge.infrastructure.clock import utc_now
 from runforge.infrastructure.json_store import save_json_object
 from runforge.infrastructure.storage import (
@@ -60,7 +61,11 @@ def prepare_retry(experiment_path: Path, *, force: bool = False) -> RetryPrepara
     except ValueError as error:
         raise RetryError(str(error)) from error
 
-    forced = _validate_retry_state(previous_status, force=force)
+    # Forcing is reported only when it actually overrode a sign of possible
+    # liveness: an inprogress state, or a claim this retry had to clear.
+    state_forced = _validate_retry_state(previous_status, force=force)
+    claim_cleared = _prepare_retry_claim(layout, force=force)
+    forced = state_forced or claim_cleared
     archive = layout.root / f"attempt-{previous_status.attempt:04d}"
     prepared_status = replace(
         previous_status,
@@ -87,6 +92,7 @@ def prepare_retry(experiment_path: Path, *, force: bool = False) -> RetryPrepara
 
 
 def _validate_retry_state(status: ExperimentStatus, *, force: bool) -> bool:
+    """Return whether the recorded state itself required operator confirmation."""
     if status.state == "failed":
         return False
     if status.state == "inprogress":
@@ -98,6 +104,22 @@ def _validate_retry_state(status: ExperimentStatus, *, force: bool) -> bool:
     if status.state == "completed":
         raise RetryError("Completed experiments cannot be retried; create a new plan instead")
     raise RetryError(f"Experiment in state {status.state!r} should be executed with run, not retry")
+
+
+def _prepare_retry_claim(experiment: ExperimentDirectory, *, force: bool) -> bool:
+    """Clear an abandoned claim with confirmation, reporting whether one was cleared."""
+    if not experiment.claim.exists():
+        return False
+    if not force:
+        raise RetryError(
+            f"Experiment is already claimed: {experiment.root} ({describe_claim_holder(experiment)}); "
+            "use force=True only after confirming its worker stopped"
+        )
+    try:
+        clear_claim(experiment)
+    except ClaimError as error:
+        raise RetryError(str(error)) from error
+    return True
 
 
 def _archive_and_reset(

@@ -5,13 +5,16 @@ from runforge.execution import (
     DiscoveryDiagnostic,
     DiscoveryError,
     DiscoveryResult,
+    ExperimentNotRunnableError,
     RetryError,
     RetryPreparation,
     WorkerError,
     WorkerProgressEvent,
+    WorkerResult,
     discover_experiments,
     prepare_retry,
     run_experiment,
+    run_worker,
 )
 from runforge.infrastructure import GitHead, GitOperationError, GitRepository
 from runforge.planning import (
@@ -37,15 +40,18 @@ __all__ = [
     "PinnedGitSource",
     "PlanRequest",
     "PlanningError",
+    "ExperimentNotRunnableError",
     "RetryError",
     "RetryPreparation",
     "WorkerError",
     "WorkerProgressEvent",
+    "WorkerResult",
     "discover_experiments",
     "plan_experiment",
     "plan_matrix",
     "prepare_retry",
     "run_experiment",
+    "run_worker",
 ]
 
 __version__ = "0.1.0"
