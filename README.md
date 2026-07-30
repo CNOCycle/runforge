@@ -151,32 +151,16 @@ paths.
 
 ## Retry A Failed Or Interrupted Experiment
 
-Retry starts another execution of the same immutable experiment configuration;
-it does not resume the previous process or select a training checkpoint:
+Start another attempt of the same immutable configuration, archiving the
+previous one under `attempt-NNNN/`:
 
 ```bash
-runforge retry --stream-output "$REPO/reports/main/01234567_baseline_0000"
+runforge retry "$REPORT_ROOT/main/01234567_baseline_0000"
 ```
 
-A normal retry accepts a `failed` experiment. An experiment left in
-`inprogress` after an interruption requires explicit confirmation that the old
-process has stopped:
-
-```bash
-runforge retry --force --stream-output \
-  "$REPO/reports/main/01234567_baseline_0000"
-```
-
-`--force` is a single-controller escape hatch. RunForge cannot yet prove that
-another worker is inactive, so using it while the original process is still
-running can execute the experiment twice. Completed experiments cannot be
-retried; create a new plan for another intentional successful run. Experiments
-in `created` or `init` remain runnable with `run`.
-
-Before execution, retry archives the previous `status.json`, logs, and artifacts
-under `attempt-NNNN/`, creates an empty `artifacts/` directory, and
-resets the status for the normal worker. The worker increments `attempt` when
-the new command starts.
+An `inprogress` or claimed experiment requires `--force` after you have
+confirmed the original process stopped. See
+[Workers and recovery](docs/guides/workers-and-recovery.md).
 
 ## Pinned Git Source
 
@@ -200,250 +184,51 @@ the plan. Pinned plans are placed under the `pinned/` report branch slug.
 
 ## Parameter Matrices
 
-Matrix planning takes one Git source (current-HEAD or pinned, same as `plan`)
-and a JSON object whose values are non-empty arrays of strings, numbers, or
-booleans:
-
-```json
-{
-  "LR": [0.1, 0.01],
-  "SEED": [1, 2]
-}
-```
+Expand one source and command template into an independent experiment directory
+per parameter combination:
 
 ```bash
-runforge matrix \
-  --name learning-rate-sweep \
-  --matrix-file matrix.json \
-  --out-dir "$REPORT_ROOT" \
-  --source-path "$REPO" \
-  -- python train.py --lr '{LR}' --seed '{SEED}' --output '{ARTIFACT_DIR}'
+runforge matrix --name sweep --matrix-file matrix.json --out-dir "$REPORT_ROOT" --source-path "$REPO" -- python train.py --lr '{LR}' --output '{ARTIFACT_DIR}'
 ```
 
-`matrix` uses current-HEAD mode by default. To sweep an explicit revision, pass
-`--source-mode pinned-git --commit v1.2.0`. Parameter names are sorted to define
-axis order, while each array's value order is preserved. Every Cartesian
-combination receives its own normal experiment directory and a rendered
-command; the selected values are also stored in `config.json` under
-`parameters`. The CLI prints every created directory.
-
-Matrix planning resolves and validates the source once and shares that single
-resolved commit (and, in current-HEAD mode, the same captured patch and
-untracked-file warning) across every combination, validates every combination
-before publication, and does not execute any experiment. Use
-`runforge run EXPERIMENT_DIRECTORY` for each resulting plan.
-
-### Matrix Configuration Mapping
-
-Directory names identify a matrix combination by position, not by value, so
-`matrix` also prints a table relating each generated directory to the parameters
-it received:
-
-```text
-Matrix configuration mapping:
-index | dir_name          | LR    | SEED
-------+-------------------+-------+-----
-0000  | a9f2ee3c_exp_0000 | 0.001 | 1
-0001  | a9f2ee3c_exp_0001 | 0.001 | 2
-0002  | a9f2ee3c_exp_0002 | 0.01  | 1
-0003  | a9f2ee3c_exp_0003 | 0.01  | 2
-```
-
-Rows follow planning order, and parameter columns follow the same sorted axis
-order used to expand the matrix. Values keep their JSON types, so a string
-parameter is quoted and a number is not; this distinguishes the string `"1"`
-from the number `1`.
-
-The same mapping is persisted beside the generated directories as the canonical
-machine-readable record:
-
-```text
-REPORT_ROOT/BRANCH_SLUG/COMMIT8_NAME_SLUG_matrix.json
-```
-
-```json
-{
-  "kind": "runforge_matrix_mapping",
-  "schema_version": 1,
-  "matrix_id": "main_a9f2ee3c_exp",
-  "parameters": ["LR", "SEED"],
-  "rows": [
-    {"index": 0, "dir_name": "a9f2ee3c_exp_0000", "parameters": {"LR": 0.001, "SEED": 1}}
-  ]
-}
-```
-
-Parameter values keep their JSON types in the artifact, so downstream analysis
-does not have to re-parse them. Planning never overwrites an existing mapping:
-each expansion reserves its own filename, so re-planning the same matrix writes
-`..._matrix_0001.json` alongside the original, and concurrent planners into one
-report root cannot claim the same name.
-
-The mapping is a record of the plans, not a precondition for them. Experiment
-directories are published before it is written, so if the artifact cannot be
-saved the command still reports every created plan and exits `0` with a warning
-on standard error rather than hiding work that already succeeded. A failed write
-removes its reserved filename instead of leaving an empty artifact behind.
-
-Because the table is usually needed after a sweep finishes rather than while it
-is planned, `matrix-show` renders a saved artifact at any later time:
-
-```bash
-runforge matrix-show "$REPORT_ROOT/main/a9f2ee3c_exp_matrix.json"
-```
-
-`matrix-show` only inspects. It never plans, executes, or changes experiment
-state, so it stays safe to run against a report root that workers are actively
-consuming. It exits `0` after rendering and `2` when the artifact is missing,
-malformed, or written by an unsupported schema version.
+Planning prints a table relating each directory to its parameters and saves it
+beside them as a JSON artifact, which `runforge matrix-show PATH` renders later.
+See [Matrices and mapping](docs/guides/matrices-and-mapping.md).
 
 ## Non-Git Directory Sources
 
-`--source-mode verified-directory` and `--source-mode directory-snapshot` plan
-a directory directly, whether or not it sits inside a Git repository. Neither
-mode captures a Git commit, branch, patch, or untracked-file list. `--out-dir`
-is required for both and must resolve outside `--source-path`:
+Two modes plan a plain directory rather than a Git repository.
+`verified-directory` executes the original in place and re-verifies it before
+every run; `directory-snapshot` captures a self-contained copy. Both require
+`--out-dir` to resolve outside `--source-path`.
 
 ```bash
-runforge plan --source-mode verified-directory \
-  --source-path "$SOURCE_DIR" --out-dir "$SOURCE_DIR-reports" \
-  -- python train.py --out '{ARTIFACT_DIR}'
+runforge plan --name ablation --source-mode directory-snapshot --source-path /work/study --out-dir /work/study-reports -- python train.py --output '{ARTIFACT_DIR}'
 ```
 
-`verified-directory` records only a manifest and re-verifies the live
-directory at the same path before every run. `directory-snapshot` copies the
-source tree into the experiment directory at plan time, so the original
-directory can be moved or deleted afterward. Both support `matrix` the same
-way Git sources do, sharing one validated source identity across every
-combination. See the
-[non-Git source modes](#non-git-directory-sources) for the full
-contract, ignore rules, and layout.
+See [Non-Git directory sources](docs/guides/non-git-sources.md).
 
 ## Discover Planned Experiments
 
-Inspect every RunForge experiment below a report root with:
+List what a report root contains, without changing anything:
 
 ```bash
 runforge discover "$REPORT_ROOT"
 ```
 
-The root defaults to the current directory when omitted. Discovery scans
-recursively without following directory symlinks and prints one experiment per
-line in deterministic path order. Each line includes its state, attempt, name,
-source identifier, and experiment path. A summary reports counts for
-`created`, `init`, `inprogress`, `completed`, `failed`, and invalid candidates.
-
-Discovery is strictly read-only. It never executes commands, changes status,
-creates claims, or waits for another process. Missing or malformed
-`config.json`/`status.json` pairs are reported individually, and the command
-returns status `2` when any are found.
-
-Discovery only reports fully published plans. Planning builds each experiment in
-a dot-prefixed staging directory inside the report root and renames it into place
-once complete, and discovery skips dot-prefixed directories, so a scan never
-returns a plan that is still being written. Planning into a report root while
-workers are consuming it is therefore safe: a plan becomes visible when it is
-complete, and plans published after a worker's scan wait for a later invocation.
+See [Workers and recovery](docs/guides/workers-and-recovery.md).
 
 ## Run Multiple Experiments With A Worker
 
-Use `worker` to consume one finite snapshot of runnable experiments:
+Consume one snapshot of runnable plans, claiming each atomically so several
+workers can share a report root:
 
 ```bash
 runforge worker "$REPORT_ROOT"
 ```
 
-The worker selects `created` and `init` plans in deterministic path order,
-attempts an atomic claim immediately before each execution, and delegates the
-claimed plan to the existing executor. If another worker already owns a plan,
-it skips that plan. The worker does not poll, rescan, wait, or run as a daemon;
-work published after its snapshot is handled by a later invocation.
-
-Use `--max-tasks` when a temporary node has a limited execution window:
-
-```bash
-runforge worker "$REPORT_ROOT" --max-tasks 2
-```
-
-A positive value limits the number of selected candidates. An omitted option
-means unlimited; zero and negative values are rejected. By default, child output remains
-in each experiment's `stdout.log` and `stderr.log`; add `--stream-output` to
-also show it in the console:
-
-```bash
-runforge worker "$REPORT_ROOT" --max-tasks 2 --stream-output
-```
-
-The worker prints effective arguments, preparation/execution progress, and a
-summary containing candidates, selected, completed, failed, skipped, deferred,
-and invalid counts. It also breaks skipped work down into non-runnable plans,
-claim contention, and plans that became stale after a claim. Exit status is `0` when selected work succeeds, `1` when a
-selected command fails, and `2` when discovery or metadata is invalid.
-
-If a worker is terminated during execution or claim cleanup, its experiment
-may retain an abandoned claim in `inprogress` or `failed` state. After
-independently confirming that the original process has stopped, use the
-explicit recovery path:
-
-```bash
-runforge retry --force "$REPORT_ROOT/BRANCH/EXPERIMENT"
-```
-
-### Identifying A Claim Holder
-
-Ownership itself is decided only by a random token, so the claim also records a
-human-readable owner naming the process to check before forcing recovery.
-Commands that refuse to act on a claimed experiment report it:
-
-```text
-error: Experiment is already claimed: /reports/main/01234567_baseline_0000 (held by node7:48213 since 2026-07-30T09:15:02Z)
-```
-
-The default owner is `HOSTNAME:PID`, which is directly checkable on a native
-Linux host with `ps -p PID` after connecting to that host. Two environments
-need care:
-
-- inside a container, the hostname is an image-local identifier and process ids
-  are namespaced, so the recorded pair usually cannot be resolved from the host;
-  correlate the hostname with `docker ps` instead, or record a scheduler-visible
-  identity; and
-- under a batch scheduler such as Slurm, a job id is far more useful than a pid,
-  because `squeue -j JOBID` answers the liveness question directly.
-
-Set `RUNFORGE_CLAIM_OWNER` in the worker's environment to record an identity
-that is actually resolvable in those environments. Every claim taken by that
-process uses it, including from `runforge worker`:
-
-```bash
-# Slurm batch script
-export RUNFORGE_CLAIM_OWNER="slurm:${SLURM_JOB_ID}"
-runforge worker "$REPORT_ROOT"
-
-# container started by an orchestrator
-docker run -e RUNFORGE_CLAIM_OWNER="pod/${POD_NAME}" ...
-```
-
-The owner resolves from an explicit `try_acquire_claim(experiment, owner=...)`
-argument, then the variable, then `HOSTNAME:PID`. A blank or whitespace-only
-value falls back to the default rather than recording an empty owner. Where the
-default is not resolvable and no override is set, treat the recorded owner as a
-correlation hint and confirm liveness through the scheduler or container runtime
-before using `--force`.
-
-This variable is read, unlike `RUNFORGE_ARTIFACT_DIR` and `RUNFORGE_INPUT_DIR`,
-which RunForge sets for the child command. Its value is printed in error output,
-so do not place secrets in it.
-
-The lightweight worker intentionally has no lease, heartbeat, timeout, or
-automatic stale-task recovery. Persistent lease-aware workers remain a future
-feature.
-
-Multiple workers require a shared filesystem on which all workers see the same
-experiment directories and metadata, and exclusive directory creation is
-atomic and coherent. Verify those guarantees for the filesystem used by your
-deployment, including NFS or SMB configurations; a local POSIX filesystem is
-the reference environment. Use one worker when those guarantees are not
-available.
+See [Workers and recovery](docs/guides/workers-and-recovery.md) for the summary
+counts, exit codes, and recovery of interrupted runs.
 
 ## Where To Save Results
 
@@ -461,22 +246,10 @@ artifact directory.
 
 ## Pipelines And `{ARTIFACT_DIR}`
 
-Argument-array commands are the default. For a pipeline or other shell syntax,
-pass one quoted command string with `--shell`:
-
-```bash
-runforge plan \
-  --name train-evaluate \
-  --out-dir "$REPORT_ROOT" \
-  --source-path "$REPO" \
-  --shell -- \
-  "python train.py --output '{ARTIFACT_DIR}' && python evaluate.py --weights '{ARTIFACT_DIR}/weights.pt'"
-```
-
-`{ARTIFACT_DIR}` is replaced by the planner with the experiment's
-`artifacts/` directory before `config.json` is written. The worker executes the
-rendered command; it does not substitute placeholders. The worker also provides
-`RUNFORGE_ARTIFACT_DIR` to the child process.
+Keep long or multi-step commands in a tracked wrapper script and write output
+below `RUNFORGE_ARTIFACT_DIR`. See
+[Long pipeline commands](docs/guides/long-pipelines.md) and
+[Dynamic environment variables](docs/guides/dynamic-environment-variables.md).
 
 ## Planned Configuration Inputs
 
