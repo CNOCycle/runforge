@@ -164,23 +164,13 @@ confirmed the original process stopped. See
 
 ## Pinned Git Source
 
-Use pinned mode when the intended source is an explicit commit or ref rather
-than the repository's current checkout. `--patch` is optional:
+Plan from an explicit commit or ref rather than the current checkout:
 
 ```bash
-runforge plan \
-  --name release-baseline \
-  --out-dir "$REPORT_ROOT" \
-  --source-path "$REPO" \
-  --source-mode pinned-git \
-  --commit v1.2.0 \
-  --patch /path/to/change.patch \
-  -- python train.py --output '{ARTIFACT_DIR}'
+runforge plan --name release-baseline --out-dir "$REPORT_ROOT" --source-path "$REPO" --source-mode pinned-git --commit v1.2.0 -- python train.py --output '{ARTIFACT_DIR}'
 ```
 
-RunForge resolves the ref to a full commit, validates the captured patch bytes
-in a detached worktree at that commit, and stores the patch plus its SHA-256 in
-the plan. Pinned plans are placed under the `pinned/` report branch slug.
+See [Source modes](docs/reference/source-modes.md) for all four modes.
 
 ## Parameter Matrices
 
@@ -300,51 +290,22 @@ environment is not serialized.
 ## Experiment Layout
 
 ```text
-REPORT_ROOT/
-  BRANCH_SLUG/
-    COMMIT8_NAME_SLUG_COUNT/
-      config.json      # immutable command, parameters, environment, and source
-      status.json      # mutable lifecycle/result state
-      git.patch        # present when captured source includes a patch
-      cmd.sh           # rendered command for inspection
-      stdout.log
-      stderr.log
-      artifacts/
-      attempt-NNNN/    # prior retry status snapshot, logs, and artifacts
+REPORT_ROOT/BRANCH_SLUG/COMMIT8_NAME_SLUG_COUNT/
+  config.json   status.json   cmd.sh
+  stdout.log    stderr.log    artifacts/
 ```
 
-`verified-directory` and `directory-snapshot` plans use `verified/` and
-`snapshot/` report bands keyed by the source's full-tree digest instead of a
-Git branch and commit, and store `source-manifest.json` (plus a captured
-`source/` tree for `directory-snapshot`) instead of `git.patch`. See the
-[non-Git source modes](#non-git-directory-sources) for that layout.
-
-The lifecycle is `created -> init -> inprogress -> completed|failed`.
+The lifecycle is `created -> init -> inprogress -> completed|failed`. See
+[Experiment layout](docs/reference/experiment-layout.md) for every file, who
+writes it, and the non-Git variants.
 
 ## Reproducibility Boundary
 
-In current-HEAD mode RunForge records the full commit and branch, captures staged
-and unstaged tracked changes as a binary Git patch, and lists untracked
-non-ignored paths. Untracked file contents are not copied. The planner warns
-when they are present, so do not make the command depend on them.
-
-In pinned mode RunForge resolves only the supplied repository and commit/ref. It
-does not infer source from the current checkout. An optional external patch is
-captured, hashed, and checked against a detached worktree at the resolved commit.
-
-`matrix` resolves its source exactly once, before expanding any combination, and
-every resulting plan shares that same resolved commit and patch identity. In
-current-HEAD mode this means the whole sweep is anchored to one `HEAD` snapshot
-taken at matrix-planning time, not re-read per combination.
-
-At run time the worker creates a detached worktree at the recorded commit,
-checks the stored patch SHA-256, applies the patch, then runs the recorded
-command from that worktree. Outputs remain in the experiment directory, outside
-the temporary worktree.
-
-Use a project-specific report root. If that root is inside the source
-repository, keep it ignored by Git so report files do not become untracked source
-files on subsequent plans.
+RunForge captures source identity, the rendered command, explicitly requested
+environment overrides, and rendered configuration inputs. It does not capture
+untracked file contents, the ambient environment, your data, or your Python
+environment. See
+[Reproducibility boundary](docs/reference/reproducibility-boundary.md).
 
 ## License
 

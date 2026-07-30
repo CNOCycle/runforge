@@ -47,8 +47,10 @@ def _parses(parser: argparse.ArgumentParser, invocation: str) -> bool:
     with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
         try:
             parser.parse_args(arguments)
-        except SystemExit:
-            return False
+        except SystemExit as exit_request:
+            # --version and --help exit zero after printing; only a usage error
+            # (exit code 2) means the documented invocation is wrong.
+            return not exit_request.code
     return True
 
 
