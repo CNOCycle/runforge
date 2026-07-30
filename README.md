@@ -254,6 +254,37 @@ order used to expand the matrix. Values keep their JSON types, so a string
 parameter is quoted and a number is not; this distinguishes the string `"1"`
 from the number `1`.
 
+The same mapping is persisted beside the generated directories as the canonical
+machine-readable record:
+
+```text
+REPORT_ROOT/BRANCH_SLUG/COMMIT8_NAME_SLUG_matrix.json
+```
+
+```json
+{
+  "kind": "runforge_matrix_mapping",
+  "schema_version": 1,
+  "matrix_id": "main_a9f2ee3c_exp",
+  "parameters": ["LR", "SEED"],
+  "rows": [
+    {"index": 0, "dir_name": "a9f2ee3c_exp_0000", "parameters": {"LR": 0.001, "SEED": 1}}
+  ]
+}
+```
+
+Parameter values keep their JSON types in the artifact, so downstream analysis
+does not have to re-parse them. Planning never overwrites an existing mapping:
+each expansion reserves its own filename, so re-planning the same matrix writes
+`..._matrix_0001.json` alongside the original, and concurrent planners into one
+report root cannot claim the same name.
+
+The mapping is a record of the plans, not a precondition for them. Experiment
+directories are published before it is written, so if the artifact cannot be
+saved the command still reports every created plan and exits `0` with a warning
+on standard error rather than hiding work that already succeeded. A failed write
+removes its reserved filename instead of leaving an empty artifact behind.
+
 ## Non-Git Directory Sources
 
 `--source-mode verified-directory` and `--source-mode directory-snapshot` plan

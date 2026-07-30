@@ -25,7 +25,7 @@ from runforge.cli.requests import matrix_request, planning_request
 from runforge.execution.discovery import DiscoveryError, discover_experiments
 from runforge.execution.retry import RetryError, prepare_retry
 from runforge.execution.worker import WorkerError, run_experiment, run_worker
-from runforge.planning.matrix_mapping import build_matrix_mapping
+from runforge.planning.matrix_mapping import build_matrix_mapping, save_matrix_mapping
 from runforge.planning.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
 
 
@@ -69,7 +69,13 @@ def _run_matrix_command(arguments: argparse.Namespace) -> int:
         ),
     )
     experiments = _plan_matrix_with_warnings(request)
-    print_matrix_mapping(build_matrix_mapping(experiments))
+    # The plans are already published and runnable, so a mapping failure must
+    # not hide them or make a successful expansion look like a failed one.
+    try:
+        print_matrix_mapping(build_matrix_mapping(experiments))
+        print(f"Matrix mapping saved at: {save_matrix_mapping(experiments)}", flush=True)
+    except ValueError as error:
+        print(f"warning: Could not record the matrix mapping: {error}", file=sys.stderr, flush=True)
     print(f"Experiment plans created ({len(experiments)}):", flush=True)
     for experiment in experiments:
         print(f"  {experiment}", flush=True)
