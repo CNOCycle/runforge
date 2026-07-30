@@ -285,6 +285,18 @@ saved the command still reports every created plan and exits `0` with a warning
 on standard error rather than hiding work that already succeeded. A failed write
 removes its reserved filename instead of leaving an empty artifact behind.
 
+Because the table is usually needed after a sweep finishes rather than while it
+is planned, `matrix-show` renders a saved artifact at any later time:
+
+```bash
+runforge matrix-show "$REPORT_ROOT/main/a9f2ee3c_exp_matrix.json"
+```
+
+`matrix-show` only inspects. It never plans, executes, or changes experiment
+state, so it stays safe to run against a report root that workers are actively
+consuming. It exits `0` after rendering and `2` when the artifact is missing,
+malformed, or written by an unsupported schema version.
+
 ## Non-Git Directory Sources
 
 `--source-mode verified-directory` and `--source-mode directory-snapshot` plan

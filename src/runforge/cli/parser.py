@@ -71,6 +71,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_planning_arguments(matrix)
 
+    matrix_show = subparsers.add_parser(
+        "matrix-show",
+        help="render a persisted matrix configuration mapping",
+        description=(
+            "Render a persisted matrix configuration mapping. This command only inspects; "
+            "it never plans, executes, or changes experiment state."
+        ),
+        formatter_class=SemanticDefaultsHelpFormatter,
+    )
+    matrix_show.add_argument(
+        "artifact",
+        type=Path,
+        help="matrix mapping JSON artifact written beside the generated experiment directories",
+    )
+
     run = subparsers.add_parser(
         "run",
         help="execute one explicit planned experiment directory",

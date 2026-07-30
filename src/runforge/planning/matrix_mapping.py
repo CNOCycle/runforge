@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from runforge.infrastructure.json_store import save_json_object
+from runforge.infrastructure.json_store import load_json_object, save_json_object
 from runforge.infrastructure.storage import ExperimentDirectory
 
 
@@ -181,3 +181,8 @@ def _reserve_mapping_file(directory: Path, prefix: str) -> Path:
             raise ValueError(f"could not create matrix mapping beside {directory}: {error}") from error
         return candidate
     raise ValueError(f"too many matrix mappings already stored beside {directory}")
+
+
+def load_matrix_mapping(path: Path) -> MatrixMapping:
+    """Load one persisted matrix mapping artifact."""
+    return MatrixMapping.from_dict(load_json_object(path))

@@ -15,7 +15,7 @@ from runforge.execution.discovery import DiscoveryResult
 from runforge.execution.worker import WorkerProgressEvent, WorkerResult
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.infrastructure.storage import ExperimentDirectory
-from runforge.planning.matrix_mapping import MatrixMapping
+from runforge.planning.matrix_mapping import MatrixMapping, load_matrix_mapping
 from runforge.planning.planner import PlanRequest
 from runforge.schemas.directory_source import DirectorySnapshotSource, VerifiedDirectorySource
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
@@ -143,6 +143,18 @@ def print_retry_arguments(arguments: argparse.Namespace) -> None:
             *_execution_summary_rows(layout),
         ],
     )
+
+
+def print_matrix_show_arguments(arguments: argparse.Namespace) -> None:
+    """Print the effective artifact path for read-only mapping inspection."""
+    _print_effective_arguments("matrix-show", [("artifact", path_text(arguments.artifact))])
+
+
+def print_matrix_mapping_file(path: Path) -> None:
+    """Load and render one persisted matrix mapping artifact."""
+    mapping = load_matrix_mapping(path)
+    print(f"Matrix identity: {mapping.matrix_id}")
+    print_matrix_mapping(mapping)
 
 
 def print_discover_arguments(arguments: argparse.Namespace) -> None:
