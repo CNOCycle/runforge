@@ -28,7 +28,7 @@ def test_top_level_help_lists_every_command_and_subcommand_guidance(capsys):
     output = _help(capsys)
 
     assert "Plan, inspect, and run reproducible Git-backed and non-Git experiments." in output
-    for subcommand in ("plan", "launch", "matrix", "run", "retry", "discover", "worker"):
+    for subcommand in ("plan", "launch", "matrix", "matrix-show", "run", "retry", "discover", "worker"):
         assert subcommand in output
     assert "runforge SUBCOMMAND --help" in output
     assert "-v, --version" in output
@@ -120,7 +120,9 @@ def test_discover_help_describes_read_only_listing(capsys):
     assert "directory to scan recursively (default: current directory)" in output
 
 
-@pytest.mark.parametrize("subcommand", ["plan", "launch", "matrix", "run", "retry", "discover", "worker"])
+@pytest.mark.parametrize(
+    "subcommand", ["plan", "launch", "matrix", "matrix-show", "run", "retry", "discover", "worker"]
+)
 def test_subcommand_help_never_exposes_raw_python_defaults(capsys, subcommand):
     output = _help(capsys, subcommand)
 
@@ -141,3 +143,11 @@ def test_worker_help_describes_single_snapshot_and_budget(capsys):
     assert "-n N, --max-tasks N" in output
     assert "must be positive when set" in output
     assert "stream stdout and stderr while preserving log files (default: disabled)" in output
+
+
+def test_matrix_show_help_states_that_it_only_inspects(capsys):
+    output = _single_line(_help(capsys, "matrix-show"))
+
+    assert "only inspects" in output
+    assert "never plans, executes, or changes experiment state" in output
+    assert "matrix mapping JSON artifact" in output

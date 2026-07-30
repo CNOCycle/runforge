@@ -5,13 +5,16 @@ from __future__ import annotations
 import argparse
 import sys
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from runforge.cli.output import (
     path_text,
     print_discover_arguments,
     print_discovery,
+    print_matrix_mapping,
+    print_matrix_mapping_file,
+    print_matrix_show_arguments,
     print_planning_arguments,
     print_retry_arguments,
     print_run_arguments,
@@ -24,6 +27,7 @@ from runforge.cli.requests import matrix_request, planning_request
 from runforge.execution.discovery import DiscoveryError, discover_experiments
 from runforge.execution.retry import RetryError, prepare_retry
 from runforge.execution.worker import WorkerError, run_experiment, run_worker
+from runforge.planning.matrix_mapping import build_matrix_mapping, save_matrix_mapping
 from runforge.planning.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
 
 
@@ -38,16 +42,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _dispatch(arguments: argparse.Namespace) -> int:
-    if arguments.subcommand == "discover":
-        return _run_discover_command(arguments)
-    if arguments.subcommand == "worker":
-        return _run_worker_command(arguments)
-    if arguments.subcommand == "matrix":
-        return _run_matrix_command(arguments)
-    if arguments.subcommand in {"plan", "launch"}:
-        return _run_plan_command(arguments)
-    if arguments.subcommand == "retry":
-        return _run_retry_command(arguments)
+    # A table rather than a branch per subcommand: adding one no longer pushes
+    # this function past the configured complexity and return-count limits.
+    return _COMMANDS[arguments.subcommand](arguments)
+
+
+def _run_run_command(arguments: argparse.Namespace) -> int:
     print_run_arguments(arguments)
     return run_experiment(
         arguments.experiment,
@@ -67,9 +67,22 @@ def _run_matrix_command(arguments: argparse.Namespace) -> int:
         ),
     )
     experiments = _plan_matrix_with_warnings(request)
+    # The plans are already published and runnable, so a mapping failure must
+    # not hide them or make a successful expansion look like a failed one.
+    try:
+        print_matrix_mapping(build_matrix_mapping(experiments))
+        print(f"Matrix mapping saved at: {save_matrix_mapping(experiments)}", flush=True)
+    except ValueError as error:
+        print(f"warning: Could not record the matrix mapping: {error}", file=sys.stderr, flush=True)
     print(f"Experiment plans created ({len(experiments)}):", flush=True)
     for experiment in experiments:
         print(f"  {experiment}", flush=True)
+    return 0
+
+
+def _run_matrix_show_command(arguments: argparse.Namespace) -> int:
+    print_matrix_show_arguments(arguments)
+    print_matrix_mapping_file(arguments.artifact)
     return 0
 
 
@@ -141,3 +154,15 @@ def _plan_matrix_with_warnings(request: MatrixPlanRequest) -> tuple[Path, ...]:
     for captured_warning in captured:
         print(f"warning: {captured_warning.message}", file=sys.stderr)
     return experiments
+
+
+_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
+    "plan": _run_plan_command,
+    "launch": _run_plan_command,
+    "matrix": _run_matrix_command,
+    "matrix-show": _run_matrix_show_command,
+    "run": _run_run_command,
+    "retry": _run_retry_command,
+    "discover": _run_discover_command,
+    "worker": _run_worker_command,
+}

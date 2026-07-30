@@ -373,3 +373,42 @@ def test_worker_cli_reports_invalid_metadata_ahead_of_a_failed_command(tmp_path,
     output = capsys.readouterr().out
     assert re.search(r"^\[\d{4}-\d{2}-\d{2}T[^]]+Z\]   failed: 1$", output, re.MULTILINE)
     assert "  invalid: 1" in output
+
+
+def test_matrix_cli_reports_created_plans_when_the_mapping_cannot_be_saved(tmp_path, capsys, monkeypatch):
+    repository = _repository(tmp_path)
+    matrix_file = tmp_path / "matrix.json"
+    save_json_object(matrix_file, {"SEED": [1, 2]})
+
+    def fail_write(path, value):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr("runforge.planning.matrix_mapping.save_json_object", fail_write)
+
+    # The plans are published and runnable, so the command must still succeed
+    # and must still tell the user where they are.
+    assert (
+        main(
+            [
+                "matrix",
+                "--matrix-file",
+                str(matrix_file),
+                "--source-path",
+                str(repository),
+                "--out-dir",
+                str(tmp_path / "reports"),
+                "--",
+                "python",
+                "train.py",
+                "--seed={SEED}",
+            ]
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    assert "warning: Could not record the matrix mapping" in captured.err
+    assert f"Experiment plans created ({CURRENT_HEAD_MATRIX_PLAN_COUNT}):" in captured.out
+    created = [line.strip() for line in captured.out.splitlines() if line.startswith("  /")]
+    assert len(created) == CURRENT_HEAD_MATRIX_PLAN_COUNT
+    assert all(Path(path).is_dir() for path in created)
