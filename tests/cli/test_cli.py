@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from runforge.cli import main
@@ -51,11 +52,21 @@ def test_cli_plans_and_runs_one_explicit_experiment(tmp_path, capsys):
     assert experiment.is_dir()
     assert main(["run", "--stream-output", str(experiment)]) == 0
     output = capsys.readouterr().out
-    assert f"Preparing experiment: {experiment}" in output
+    assert re.search(
+        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Preparing experiment: "
+        rf"{re.escape(str(experiment))}$",
+        output,
+        re.MULTILINE,
+    )
     assert "Executing command: python train.py" in output
     assert "  output mode: streaming and logging" in output
     assert "planned command ran" in output
-    assert f"Experiment completed with exit code 0: {experiment}" in output
+    assert re.search(
+        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Experiment completed with exit code 0: "
+        rf"{re.escape(str(experiment))}$",
+        output,
+        re.MULTILINE,
+    )
 
 
 def test_cli_rejects_missing_command(capsys):
@@ -240,10 +251,20 @@ def test_cli_launches_a_new_experiment_immediately(tmp_path, capsys):
     experiment = planned_path(output)
     assert "RunForge launch effective arguments:" in output
     assert "  stream output: enabled" in output
-    assert f"Preparing experiment: {experiment}" in output
+    assert re.search(
+        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Preparing experiment: "
+        rf"{re.escape(str(experiment))}$",
+        output,
+        re.MULTILINE,
+    )
     assert "Executing command: python train.py" in output
     assert "planned command ran" in output
-    assert f"Experiment completed with exit code 0: {experiment}" in output
+    assert re.search(
+        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Experiment completed with exit code 0: "
+        rf"{re.escape(str(experiment))}$",
+        output,
+        re.MULTILINE,
+    )
     status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
 
     assert status.state == "completed"
@@ -271,7 +292,13 @@ def test_cli_renders_worker_warning_events_to_stderr(tmp_path, capsys):
 
     print_worker_progress(event)
 
-    assert capsys.readouterr().err == (f"warning: Could not release claim: metadata unavailable: {experiment}\n")
+    warning_output = capsys.readouterr().err
+    assert re.search(
+        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] warning: "
+        rf"Could not release claim: metadata unavailable: {re.escape(str(experiment))}$",
+        warning_output,
+        re.MULTILINE,
+    )
 
 
 def test_worker_cli_prints_effective_arguments_progress_and_summary(tmp_path, capsys):
@@ -289,13 +316,13 @@ def test_worker_cli_prints_effective_arguments_progress_and_summary(tmp_path, ca
     assert main(["worker", str(reports), "--max-tasks", "1"]) == 0
 
     output = capsys.readouterr().out
-    assert "RunForge worker effective arguments:" in output
+    assert re.search(r"^\[\d{4}-\d{2}-\d{2}T[^]]+Z\] RunForge worker effective arguments:$", output, re.MULTILINE)
     assert f"  root: {reports.resolve()}" in output
     assert "  max tasks: 1" in output
     assert "  stream output: disabled" in output
-    assert "Preparing experiment:" in output
-    assert "Executing command: python train.py" in output
-    assert "Experiment completed with exit code 0:" in output
+    assert re.search(r"Preparing experiment \[1/1\]:", output)
+    assert "Executing command [1/1]: python train.py" in output
+    assert "Experiment completed with exit code 0 [1/1]:" in output
     assert "Worker summary:" in output
     assert "  candidates: 1" in output
     assert "  selected: 1" in output
@@ -328,8 +355,8 @@ def test_worker_cli_returns_one_when_a_selected_command_fails(tmp_path, capsys):
     assert main(["worker", str(reports)]) == 1
 
     output = capsys.readouterr().out
-    assert "  completed: 0" in output
-    assert "  failed: 1" in output
+    assert re.search(r"^\[\d{4}-\d{2}-\d{2}T[^]]+Z\]   completed: 0$", output, re.MULTILINE)
+    assert re.search(r"^\[\d{4}-\d{2}-\d{2}T[^]]+Z\]   failed: 1$", output, re.MULTILINE)
     assert "  invalid: 0" in output
 
 
@@ -344,5 +371,5 @@ def test_worker_cli_reports_invalid_metadata_ahead_of_a_failed_command(tmp_path,
     assert main(["worker", str(reports)]) == CLI_ERROR_EXIT
 
     output = capsys.readouterr().out
-    assert "  failed: 1" in output
+    assert re.search(r"^\[\d{4}-\d{2}-\d{2}T[^]]+Z\]   failed: 1$", output, re.MULTILINE)
     assert "  invalid: 1" in output

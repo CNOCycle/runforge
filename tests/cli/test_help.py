@@ -128,10 +128,16 @@ def test_subcommand_help_never_exposes_raw_python_defaults(capsys, subcommand):
     assert "(default: False)" not in output
 
 
+def test_worker_max_tasks_short_flag_sets_value():
+    max_tasks = 2
+    arguments = build_parser().parse_args(["worker", "-n", str(max_tasks)])
+    assert arguments.max_tasks == max_tasks
+
+
 def test_worker_help_describes_single_snapshot_and_budget(capsys):
     output = _single_line(_help(capsys, "worker"))
 
     assert "one discovery snapshot" in output
-    assert "--max-tasks N" in output
+    assert "-n N, --max-tasks N" in output
     assert "must be positive when set" in output
     assert "stream stdout and stderr while preserving log files (default: disabled)" in output

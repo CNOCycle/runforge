@@ -86,6 +86,8 @@ class WorkerProgressEvent:
     command: ExperimentCommand | None = None
     exit_code: int | None = None
     error: str | None = None
+    task_index: int | None = None
+    task_total: int | None = None
 
 
 def run_experiment(
@@ -162,8 +164,16 @@ def run_worker(
     not_runnable = len(discovery.experiments) - len(candidates)
     claim_contended = 0
     stale_skipped = 0
-    for discovered in selected:
+    task_total = len(candidates)
+    for task_index, discovered in enumerate(selected, start=1):
         experiment = ExperimentDirectory.resolve(discovered.path)
+
+        def task_progress(event: WorkerProgressEvent) -> None:
+            _notify_progress(
+                progress,
+                replace(event, task_index=task_index, task_total=task_total),
+            )
+
         try:
             claim = try_acquire_claim(experiment)
         except ClaimError as error:
@@ -183,7 +193,7 @@ def run_worker(
             exit_code = run_experiment(
                 experiment.root,
                 stream_output=stream_output,
-                progress=progress,
+                progress=task_progress,
                 claim=claim,
             )
         except ExperimentNotRunnableError:

@@ -132,6 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="report root to scan once (default: current directory)",
     )
     worker.add_argument(
+        "-n",
         "--max-tasks",
         type=_positive_integer,
         metavar="N",
