@@ -1,7 +1,9 @@
 """Tests for strict matrix placeholder discovery."""
 
+import pytest
+
 from runforge.planning.inputs import InputTemplate
-from runforge.planning.placeholders import command_placeholders, input_placeholders
+from runforge.planning.placeholders import command_placeholders, input_placeholders, validate_declared_placeholders
 from runforge.schemas.experiment import ExperimentCommand
 
 
@@ -25,3 +27,20 @@ def test_input_placeholders_skip_copy_entries():
     )
 
     assert input_placeholders(inputs) == {"LR", "SEED"}
+
+
+def test_declared_placeholder_validation_allows_matrix_and_runforge_names():
+    validate_declared_placeholders(
+        ExperimentCommand.argv(("python", "train.py", "--lr={LR}", "--out={ARTIFACT_DIR}")),
+        (InputTemplate(path="config.yaml", kind="text-template", content="seed: {SEED}"),),
+        {"LR", "SEED"},
+    )
+
+
+def test_declared_placeholder_validation_rejects_unknown_names():
+    with pytest.raises(ValueError, match=r"\{MISSING\}"):
+        validate_declared_placeholders(
+            ExperimentCommand.argv(("python", "train.py", "--value={MISSING}")),
+            (),
+            {"LR"},
+        )
