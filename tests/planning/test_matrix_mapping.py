@@ -24,11 +24,12 @@ EXPECTED_COMBINATIONS = 4
 
 def _matrix(tmp_path: Path, parameters: dict[str, list], name: str = "exp") -> tuple[Path, ...]:
     repository = create_git_repository(tmp_path / "repository", {"train.py": "print('ok')\n"})
+    matrix_arguments = tuple(f"--{key.lower()}={{{key}}}" for key in sorted(parameters))
     return plan_matrix(
         MatrixPlanRequest(
             template=PlanRequest(
                 name=name,
-                command=ExperimentCommand.argv(("python", "train.py")),
+                command=ExperimentCommand.argv(("python", "train.py", *matrix_arguments)),
                 source_path=repository,
                 output_root=tmp_path / "reports",
             ),

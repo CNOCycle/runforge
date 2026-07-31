@@ -447,7 +447,7 @@ def test_matrix_planner_directory_snapshot_cleans_up_staging_after_publishing_al
     source = _verified_directory_source(tmp_path)
     template = PlanRequest(
         name="ablation",
-        command=ExperimentCommand.argv(("python", "train.py")),
+        command=ExperimentCommand.argv(("python", "train.py", "--seed={SEED}")),
         source_path=source,
         output_root=tmp_path / "reports",
         directory_source_mode="directory-snapshot",
@@ -567,3 +567,116 @@ def test_planner_cleans_up_staging_when_directory_snapshot_publication_fails(tmp
     leftovers = list(Path(tempfile.gettempdir()).glob("runforge-snapshot-*"))
     assert not leftovers
     assert list((output_root / "snapshot").iterdir()) == []
+
+
+def test_matrix_planner_rejects_duplicate_effective_executions(tmp_path):
+    repository = _repository(tmp_path)
+    output_root = tmp_path / "reports"
+    request = MatrixPlanRequest(
+        template=PlanRequest(
+            name="duplicate matrix",
+            command=ExperimentCommand.argv(("python", "train.py", "--lr=0.1", "--out={ARTIFACT_DIR}")),
+            output_root=output_root,
+            source=PinnedGitSource(repository=repository, commit=git(repository, "rev-parse", "HEAD")),
+            inputs=(
+                InputTemplate(
+                    path="config.json",
+                    kind="json-template",
+                    content='{"output": "{ARTIFACT_DIR}/run"}',
+                ),
+            ),
+        ),
+        parameters={"LR": [0.1, 0.01]},
+    )
+
+    with pytest.raises(PlanningError, match="identical effective executions"):
+        plan_matrix(request)
+
+    assert not list(output_root.rglob("config.json"))
+
+
+def test_matrix_planner_rejects_duplicate_command_only_executions(tmp_path):
+    repository = _repository(tmp_path)
+    output_root = tmp_path / "reports"
+    request = MatrixPlanRequest(
+        template=PlanRequest(
+            name="duplicate command-only matrix",
+            command=ExperimentCommand.argv(("python", "train.py", "--lr=0.1", "--out={ARTIFACT_DIR}")),
+            output_root=output_root,
+            source=PinnedGitSource(repository=repository, commit=git(repository, "rev-parse", "HEAD")),
+        ),
+        parameters={"LR": [0.1, 0.01]},
+    )
+
+    with pytest.raises(PlanningError, match="identical effective executions"):
+        plan_matrix(request)
+
+    assert not list(output_root.rglob("config.json"))
+
+
+def test_matrix_planner_accepts_an_axis_used_only_in_rendered_inputs(tmp_path):
+    """Rendered inputs alone can distinguish combinations.
+
+    Every combination here renders the same command, so the input digests are
+    the only thing separating them. Dropping them from the execution signature
+    would reject a valid plan rather than merely miss a duplicate, which is the
+    more damaging direction: it blocks the linked-configuration workflow that
+    input trees exist to serve.
+    """
+    repository = _repository(tmp_path)
+    output_root = tmp_path / "reports"
+    request = MatrixPlanRequest(
+        template=PlanRequest(
+            name="template-only axis",
+            command=ExperimentCommand.argv(("python", "train.py", "--out={ARTIFACT_DIR}")),
+            output_root=output_root,
+            source=PinnedGitSource(repository=repository, commit=git(repository, "rev-parse", "HEAD")),
+            inputs=(
+                InputTemplate(
+                    path="config.json",
+                    kind="json-template",
+                    content='{"lr": "{LR}", "output": "{ARTIFACT_DIR}/run"}',
+                ),
+            ),
+        ),
+        parameters={"LR": [0.1, 0.01]},
+    )
+
+    experiments = plan_matrix(request)
+
+    assert len(experiments) == _SEED_COMBINATION_COUNT
+    rendered = [(experiment / "inputs" / "config.json").read_text(encoding="utf-8") for experiment in experiments]
+    assert '"lr": 0.1' in rendered[0]
+    assert '"lr": 0.01' in rendered[1]
+
+
+def test_matrix_planner_rejects_undeclared_argv_placeholder(tmp_path):
+    repository = _repository(tmp_path)
+
+    with pytest.raises(PlanningError, match=r"Undeclared matrix placeholder.*\{MISSING\}"):
+        MatrixPlanRequest(
+            template=PlanRequest(
+                name="undeclared placeholder",
+                command=ExperimentCommand.argv(("python", "train.py", "--value={MISSING}")),
+                output_root=tmp_path / "reports",
+                source=PinnedGitSource(repository=repository, commit=git(repository, "rev-parse", "HEAD")),
+            ),
+            parameters={"LR": [0.1]},
+        )
+
+
+def test_matrix_planner_keeps_shell_braces_literal(tmp_path):
+    repository = _repository(tmp_path)
+    request = MatrixPlanRequest(
+        template=PlanRequest(
+            name="shell braces",
+            command=ExperimentCommand.shell("awk '{print $1}' input.txt --out '{ARTIFACT_DIR}'"),
+            output_root=tmp_path / "reports",
+            source=PinnedGitSource(repository=repository, commit=git(repository, "rev-parse", "HEAD")),
+        ),
+        parameters={"LR": [0.1]},
+    )
+
+    experiment = plan_matrix(request)[0]
+    configuration = ExperimentConfiguration.from_dict(load_json_object(experiment / "config.json"))
+    assert "{print $1}" in (configuration.command.script or "")

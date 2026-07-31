@@ -42,6 +42,51 @@ The source is resolved and validated once and shared by every combination, and
 every combination is validated before anything is published. Planning never
 executes a command.
 
+## Matrix Consistency Checks
+
+RunForge checks matrix combinations before publishing them. A declared axis
+must affect the effective command or one of the rendered input files when its
+values produce otherwise identical executions.
+
+For example, this matrix declares two learning rates:
+
+```json
+{
+  "LR": [0.1, 0.01],
+  "SEED": [1, 2]
+}
+```
+
+This command is unsafe because `--lr` is fixed:
+
+```bash
+runforge matrix --matrix-file matrix.json -- \
+  python train.py --lr 0.1 --seed '{SEED}' --output '{ARTIFACT_DIR}'
+```
+
+RunForge rejects the plan because the combinations that differ only in `LR`
+have the same effective command and input tree after generated artifact paths
+are normalized. The error identifies the colliding combinations and differing
+parameters. No experiment configuration is published.
+
+Use the matrix placeholder to make the axis affect execution:
+
+```bash
+runforge matrix --matrix-file matrix.json -- \
+  python train.py --lr '{LR}' --seed '{SEED}' --output '{ARTIFACT_DIR}'
+```
+
+Duplicate values such as `"SEED": [1, 1]` are also rejected when they produce
+the same effective execution. A single-value axis may remain metadata-only; the
+safety check is concerned with duplicate work, not whether every axis name
+appears in the command.
+
+Strict placeholders in argument-array commands and templated input files must
+be declared matrix parameters or RunForge-owned values such as
+`{ARTIFACT_DIR}` and `{INPUT_DIR}`. Shell commands are treated as opaque
+scripts for placeholder discovery, so valid shell syntax such as
+`awk '{print $1}'` remains unchanged.
+
 ## Reading The Generated Layout
 
 Directory names identify a combination by position, not by value:

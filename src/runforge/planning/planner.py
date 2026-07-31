@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shlex
@@ -21,6 +22,7 @@ from runforge.planning.directory_source import (
 )
 from runforge.planning.inputs import InputRenderingError, InputTemplate, RenderedInput, render_input_templates
 from runforge.planning.matrix import JsonScalar, MatrixError, expand_matrix, parameter_text
+from runforge.planning.placeholders import validate_declared_placeholders
 from runforge.planning.source import (
     ResolvedGitSource,
     SourceResolutionError,
@@ -106,6 +108,10 @@ class MatrixPlanRequest:
         try:
             combinations = expand_matrix(self.parameters)
         except MatrixError as error:
+            raise PlanningError(str(error)) from error
+        try:
+            validate_declared_placeholders(self.template.command, self.template.inputs, self.parameters)
+        except ValueError as error:
             raise PlanningError(str(error)) from error
         object.__setattr__(self, "parameters", {key: tuple(self.parameters[key]) for key in sorted(self.parameters)})
         object.__setattr__(self, "combinations", combinations)
@@ -269,7 +275,55 @@ def _prepare_matrix(
         destination = _destination(output_root, band, identity, template.name, reserved=reserved)
         reserved.add(destination)
         prepared.append(_prepare_experiment(template, source, destination, parameters, timestamp))
+    _validate_matrix_execution_signatures(prepared)
     return prepared
+
+
+def _validate_matrix_execution_signatures(prepared: Sequence[_PreparedExperiment]) -> None:
+    """Reject combinations that render the same command and immutable inputs."""
+    seen: dict[tuple[object, ...], tuple[int, _PreparedExperiment]] = {}
+    for index, experiment in enumerate(prepared):
+        signature = _matrix_execution_signature(experiment)
+        previous = seen.get(signature)
+        if previous is not None:
+            previous_index, previous_experiment = previous
+            differences = {
+                key: (previous_experiment.configuration.parameters[key], experiment.configuration.parameters[key])
+                for key in sorted(experiment.configuration.parameters)
+                if previous_experiment.configuration.parameters[key] != experiment.configuration.parameters[key]
+            }
+            raise PlanningError(
+                "Matrix combinations produce identical effective executions: "
+                f"combination {previous_index} and {index}; differing parameters: {differences}"
+            )
+        seen[signature] = (index, experiment)
+
+
+def _matrix_execution_signature(experiment: _PreparedExperiment) -> tuple[object, ...]:
+    """Return a path-independent signature for one prepared matrix execution."""
+    layout = ExperimentDirectory(experiment.destination)
+    command = experiment.configuration.command
+
+    def normalize(value: str) -> str:
+        return value.replace(str(layout.artifacts), "<ARTIFACT_DIR>").replace(str(layout.inputs), "<INPUT_DIR>")
+
+    if command.mode == "argv":
+        command_signature: tuple[object, ...] = (
+            command.mode,
+            tuple(normalize(argument) for argument in command.arguments),
+        )
+    else:
+        command_signature = (command.mode, normalize(command.script or ""))
+
+    def normalize_bytes(value: bytes) -> bytes:
+        return value.replace(str(layout.artifacts).encode(), b"<ARTIFACT_DIR>").replace(
+            str(layout.inputs).encode(), b"<INPUT_DIR>"
+        )
+
+    input_signature = tuple(
+        (rendered.path, hashlib.sha256(normalize_bytes(rendered.content)).hexdigest()) for rendered in experiment.inputs
+    )
+    return command_signature + (input_signature,)
 
 
 def _publish_all(

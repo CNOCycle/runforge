@@ -25,7 +25,7 @@ def _artifact(tmp_path: Path) -> Path:
         MatrixPlanRequest(
             template=PlanRequest(
                 name="sweep",
-                command=ExperimentCommand.argv(("python", "train.py")),
+                command=ExperimentCommand.argv(("python", "train.py", "--lr={LR}", "--seed={SEED}")),
                 source_path=repository,
                 output_root=tmp_path / "reports",
             ),
