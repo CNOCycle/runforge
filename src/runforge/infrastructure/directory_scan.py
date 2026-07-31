@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
 
+from runforge.infrastructure.paths import is_absent, is_safe_directory, is_safe_file
+
 
 IGNORE_FILE = ".gitignore"
 _ALWAYS_IGNORED_NAME = ".git"
@@ -57,7 +59,7 @@ def scan_directory(root: Path, *, ignore_file: bool = True, reject_ignored: bool
     it does not depend on traversal order, timestamps, or user/group IDs.
     """
     resolved_root = Path(root).expanduser()
-    if resolved_root.is_symlink() or not resolved_root.is_dir():
+    if not is_safe_directory(resolved_root):
         raise DirectoryScanError(f"Source directory does not exist or is not a directory: {resolved_root}")
     resolved_root = resolved_root.resolve()
     patterns = _load_ignore_patterns(resolved_root) if ignore_file else ()
@@ -78,11 +80,11 @@ def capture_directory(source: Path, destination: Path) -> DirectoryScanResult:
     executable bit, while its content digest is computed in the same pass.
     """
     resolved_root = Path(source).expanduser()
-    if resolved_root.is_symlink() or not resolved_root.is_dir():
+    if not is_safe_directory(resolved_root):
         raise DirectoryScanError(f"Source directory does not exist or is not a directory: {resolved_root}")
     resolved_root = resolved_root.resolve()
     resolved_destination = Path(destination).expanduser()
-    if resolved_destination.exists() or resolved_destination.is_symlink():
+    if not is_absent(resolved_destination):
         raise DirectoryScanError(f"Capture destination already exists: {resolved_destination}")
     patterns = _load_ignore_patterns(resolved_root)
     paths: list[Path] = []
@@ -173,7 +175,7 @@ def _tree_digest(files: Sequence[ScannedFile]) -> str:
 
 def _load_ignore_patterns(root: Path) -> tuple[str, ...]:
     ignore_file = root / IGNORE_FILE
-    if ignore_file.is_symlink() or not ignore_file.is_file():
+    if not is_safe_file(ignore_file):
         return ()
     try:
         lines = ignore_file.read_text(encoding="utf-8").splitlines()

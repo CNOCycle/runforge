@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import runforge.execution.sources as sources_module
 import runforge.execution.worker as worker_module
 from runforge.execution.worker import WorkerError, WorkerProgressEvent, run_experiment
 from runforge.infrastructure.claims import ClaimError, release_claim, try_acquire_claim
@@ -488,13 +489,13 @@ def test_worker_rechecks_materialized_snapshot_before_execution(tmp_path, monkey
             directory_source_mode="directory-snapshot",
         )
     )
-    original_copytree = worker_module.shutil.copytree
+    original_copytree = sources_module.shutil.copytree
 
     def tamper(source_path, destination_path, *args, **kwargs):
         (Path(source_path) / "train.py").write_text('print("tampered")\n', encoding="utf-8")
         return original_copytree(source_path, destination_path, *args, **kwargs)
 
-    monkeypatch.setattr(worker_module.shutil, "copytree", tamper)
+    monkeypatch.setattr(sources_module.shutil, "copytree", tamper)
     with pytest.raises(WorkerError, match="checksum"):
         run_experiment(experiment)
 

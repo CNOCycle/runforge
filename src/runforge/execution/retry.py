@@ -10,6 +10,7 @@ from pathlib import Path
 from runforge.infrastructure.claims import ClaimError, clear_claim, describe_claim_holder
 from runforge.infrastructure.clock import utc_now
 from runforge.infrastructure.json_store import save_json_object
+from runforge.infrastructure.paths import is_absent, is_safe_directory
 from runforge.infrastructure.storage import (
     ARTIFACTS_DIRECTORY,
     STDERR_LOG_FILE,
@@ -129,10 +130,12 @@ def _archive_and_reset(
     prepared_status: ExperimentStatus,
 ) -> None:
     history = archive.parent
-    if history.is_symlink() or (history.exists() and not history.is_dir()):
+    # A dangling symlink reports exists() as false while still occupying the
+    # path, so absence and a usable directory must both be checked.
+    if not is_absent(history) and not is_safe_directory(history):
         raise RetryError(f"Retry history path is not a directory: {history}")
     history.mkdir(parents=True, exist_ok=True)
-    if archive.is_symlink() or archive.exists():
+    if not is_absent(archive):
         raise RetryError(f"Retry archive already exists: {archive}")
 
     staging = Path(tempfile.mkdtemp(prefix=f".{archive.name}.tmp-", dir=history))
@@ -182,7 +185,7 @@ def _rollback_archive(transaction: _ArchiveTransaction) -> None:
         ExperimentDirectory(transaction.experiment).artifacts.rmdir()
     for name in reversed(transaction.moved_outputs):
         destination = transaction.experiment / name
-        if destination.is_symlink() or destination.exists():
+        if not is_absent(destination):
             raise OSError(f"Cannot restore retry output because the destination exists: {destination}")
         (location / name).replace(destination)
     if location.exists():

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from runforge.infrastructure.directory_scan import DirectoryScanError, ScannedFile, capture_directory, scan_directory
+from runforge.infrastructure.paths import is_safe_directory
 from runforge.schemas.directory_source import (
     DIRECTORY_SNAPSHOT_DIRECTORY,
     DirectorySnapshotSource,
@@ -32,7 +33,7 @@ class ResolvedVerifiedDirectorySource:
 def resolve_verified_directory_source(source_path: Path) -> ResolvedVerifiedDirectorySource:
     """Scan and validate a live, path-backed non-Git source directory."""
     resolved_path = Path(source_path).expanduser()
-    if resolved_path.is_symlink() or not resolved_path.is_dir():
+    if not is_safe_directory(resolved_path):
         raise DirectorySourceResolutionError(
             f"Verified-directory source must be a non-symlink directory: {resolved_path}"
         )
@@ -71,7 +72,7 @@ class ResolvedDirectorySnapshotSource:
 def resolve_directory_snapshot_source(source_path: Path) -> ResolvedDirectorySnapshotSource:
     """Atomically capture a non-Git source directory into a temporary staging tree."""
     resolved_path = Path(source_path).expanduser()
-    if resolved_path.is_symlink() or not resolved_path.is_dir():
+    if not is_safe_directory(resolved_path):
         raise DirectorySourceResolutionError(
             f"Directory-snapshot source must be a non-symlink directory: {resolved_path}"
         )
