@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -102,7 +103,7 @@ def _row_from_dict(row: object, parameters: tuple[str, ...]) -> MatrixMappingRow
 
 def _is_matrix_scalar(value: object) -> bool:
     """Report whether one value is a scalar the matrix planner can produce."""
-    return isinstance(value, str | int | float | bool)
+    return isinstance(value, str | int | bool) or (isinstance(value, float) and math.isfinite(value))
 
 
 def build_matrix_mapping(experiments: Sequence[Path]) -> MatrixMapping:

@@ -197,6 +197,14 @@ def _document(rows: list[dict], parameters: list[str] | None = None) -> dict:
             [{"index": 0, "dir_name": "d0", "parameters": {"LR": 0.1, "SEED": [1, 2]}}],
             "non-scalar value for 'SEED'",
         ),
+        (
+            [{"index": 0, "dir_name": "d0", "parameters": {"LR": float("nan"), "SEED": 1}}],
+            "non-scalar value for 'LR'",
+        ),
+        (
+            [{"index": 0, "dir_name": "d0", "parameters": {"LR": float("inf"), "SEED": 1}}],
+            "non-scalar value for 'LR'",
+        ),
     ],
 )
 def test_mapping_artifact_rejects_rows_that_disagree_with_their_columns(rows, match):
