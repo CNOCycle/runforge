@@ -51,7 +51,11 @@ output to the console while still writing `stdout.log` and `stderr.log`.
 `--force` / `-f` on `retry` confirms that you have independently verified the
 previous process stopped.
 
-`--max-tasks N` / `-n N` on `worker` bounds one invocation. `N` must be positive.
+`--max-tasks N` / `-n N` on `worker` bounds the number of successfully
+completed tasks in one invocation. Contention, stale-after-claim skips, and
+failed executions do not consume the completion quota; the worker continues
+through its initial snapshot until the quota is reached or no candidates remain.
+`N` must be positive.
 
 ## The Command After `--`
 

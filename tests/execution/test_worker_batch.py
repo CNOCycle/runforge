@@ -18,6 +18,7 @@ from tests.support import create_git_repository
 
 
 EXPECTED_TASKS = 2
+THREE_CANDIDATES = 3
 
 
 def _plan(tmp_path: Path, name: str, script: str):
@@ -81,13 +82,47 @@ def test_worker_skips_an_experiment_claimed_by_another_worker(tmp_path):
     result = run_worker(tmp_path / "reports")
 
     assert result.candidates == 1
-    assert result.selected == 1
+    assert result.selected == 0
     assert result.completed == 0
     assert result.failed == 0
     assert result.skipped == 1
     assert result.not_runnable == 0
     assert result.claim_contended == 1
     assert result.stale_skipped == 0
+
+
+def test_worker_continues_past_contention_until_task_budget_is_met(tmp_path):
+    experiments = [
+        _plan(tmp_path, "first", "print('first')\n"),
+        _plan(tmp_path, "second", "print('second')\n"),
+        _plan(tmp_path, "third", "print('third')\n"),
+    ]
+    first = sorted(experiments)[0]
+    claim = try_acquire_claim(ExperimentDirectory.resolve(first), owner="other-worker")
+    assert claim is not None
+
+    result = run_worker(tmp_path / "reports", max_tasks=1)
+
+    assert result.candidates == THREE_CANDIDATES
+    assert result.selected == 1
+    assert result.completed == 1
+    assert result.claim_contended == 1
+    assert result.stale_skipped == 0
+    assert result.deferred == 1
+
+
+def test_worker_continues_past_failures_until_completion_budget_is_met(tmp_path):
+    _plan(tmp_path, "failing", "raise SystemExit(7)\n")
+    _plan(tmp_path, "successful-one", "print('successful one')\n")
+    _plan(tmp_path, "successful-two", "print('successful two')\n")
+
+    result = run_worker(tmp_path / "reports", max_tasks=EXPECTED_TASKS)
+
+    assert result.selected == EXPECTED_TASKS + 1
+    assert result.completed == EXPECTED_TASKS
+    assert result.failed == 1
+    assert result.skipped == 0
+    assert result.deferred == 0
 
 
 def _worker_process(root: Path, barrier, results) -> None:

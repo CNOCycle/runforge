@@ -139,14 +139,18 @@ def run_worker(
     candidates = tuple(
         experiment for experiment in discovery.experiments if experiment.status.state in {"created", "init"}
     )
-    selected = candidates if max_tasks is None else candidates[:max_tasks]
     completed = 0
     failed = 0
     not_runnable = len(discovery.experiments) - len(candidates)
     claim_contended = 0
     stale_skipped = 0
     task_total = len(candidates)
-    for task_index, discovered in enumerate(selected, start=1):
+    attempted = 0
+    scanned = 0
+    for task_index, discovered in enumerate(candidates, start=1):
+        if max_tasks is not None and completed >= max_tasks:
+            break
+        scanned = task_index
         experiment = ExperimentDirectory.resolve(discovered.path)
 
         def task_progress(event: WorkerProgressEvent) -> None:
@@ -155,49 +159,67 @@ def run_worker(
                 replace(event, task_index=task_index, task_total=task_total),
             )
 
-        try:
-            claim = try_acquire_claim(experiment)
-        except ClaimError as error:
-            _notify_progress(
-                progress,
-                replace(
-                    _progress_event("warning", experiment, stream_output),
-                    error=f"Could not acquire claim: {error}",
-                ),
-            )
-            failed += 1
-            continue
-        if claim is None:
+        outcome = _process_worker_candidate(
+            experiment,
+            stream_output=stream_output,
+            progress=task_progress,
+        )
+        if outcome == "claim_contended":
             claim_contended += 1
-            continue
-        try:
-            exit_code = run_experiment(
-                experiment.root,
-                stream_output=stream_output,
-                progress=task_progress,
-                claim=claim,
-            )
-        except ExperimentNotRunnableError:
+        elif outcome == "stale":
             stale_skipped += 1
-        except WorkerError:
-            failed += 1
         else:
-            if exit_code == 0:
+            attempted += 1
+            if outcome == "completed":
                 completed += 1
             else:
                 failed += 1
     return WorkerResult(
         root=discovery.root,
         candidates=len(candidates),
-        selected=len(selected),
+        selected=attempted,
         completed=completed,
         failed=failed,
         not_runnable=not_runnable,
         claim_contended=claim_contended,
         stale_skipped=stale_skipped,
-        deferred=len(candidates) - len(selected),
+        deferred=len(candidates) - scanned,
         invalid=len(discovery.diagnostics),
     )
+
+
+def _process_worker_candidate(
+    experiment: ExperimentDirectory,
+    *,
+    stream_output: bool,
+    progress: Callable[[WorkerProgressEvent], None] | None,
+) -> Literal["completed", "failed", "claim_contended", "stale"]:
+    """Claim and process one candidate, returning its quota outcome."""
+    try:
+        claim = try_acquire_claim(experiment)
+    except ClaimError as error:
+        _notify_progress(
+            progress,
+            replace(
+                _progress_event("warning", experiment, stream_output),
+                error=f"Could not acquire claim: {error}",
+            ),
+        )
+        return "failed"
+    if claim is None:
+        return "claim_contended"
+    try:
+        exit_code = run_experiment(
+            experiment.root,
+            stream_output=stream_output,
+            progress=progress,
+            claim=claim,
+        )
+    except ExperimentNotRunnableError:
+        return "stale"
+    except WorkerError:
+        return "failed"
+    return "completed" if exit_code == 0 else "failed"
 
 
 def _run_claimed_experiment(
