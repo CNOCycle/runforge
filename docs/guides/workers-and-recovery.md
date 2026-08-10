@@ -32,9 +32,10 @@ process is planning into the same root.
 runforge worker "$REPORT_ROOT"
 ```
 
-It selects `created` and `init` plans in deterministic path order, atomically
+It scans `created` and `init` plans in deterministic path order, atomically
 claims each one immediately before executing it, and delegates to the same
-executor `run` uses. If another worker already owns a plan, it skips it.
+executor `run` uses. If another worker already owns a plan, it skips that plan
+and continues scanning rather than consuming a task quota slot.
 
 Run several against one report root to parallelize. Only the atomic claim
 decides ownership; ordering and start-time differences are not correctness
@@ -50,7 +51,11 @@ Bound a temporary node with `--max-tasks`:
 runforge worker "$REPORT_ROOT" --max-tasks 2
 ```
 
-`N` must be positive. Add `--stream-output` to mirror child output to the
+`N` must be positive. It means “complete `N` tasks,” not “inspect only `N`
+candidates.” Claim contention, stale-after-claim skips, and failed executions
+do not consume the completion quota; the worker continues scanning the initial
+snapshot after each of them. It stops when the quota is reached or when the
+snapshot is exhausted. Add `--stream-output` to mirror child output to the
 console while still writing `stdout.log` and `stderr.log`.
 
 ## Reading The Summary
@@ -69,7 +74,11 @@ Worker summary:
   invalid: 0
 ```
 
-The three skip reasons answer different questions. **non-runnable** counts plans
+`selected` counts tasks claimed for processing by this invocation. `completed`
+counts successful tasks and is the counter bounded by `--max-tasks`. `deferred`
+counts runnable snapshot entries that were not scanned because the task quota
+was reached. The three skip reasons answer different questions. **non-runnable**
+counts plans
 that were never eligible, including ones an earlier invocation already
 completed. **claim contention** counts plans another worker owned. **stale after
 claim** counts plans that were finished by a peer between this worker's scan and

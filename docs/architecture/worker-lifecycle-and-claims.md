@@ -15,10 +15,10 @@ scan the report root once
     +-- created/init -> ordered candidate list
     +-- inprogress/completed/failed -> ignore
     |
-for each candidate:
-    atomic claim -> reread status -> execute, or skip
+for each candidate while the task quota remains:
+    atomic claim -> reread status -> execute, or skip and continue
     |
-candidates exhausted or --max-tasks reached
+candidates exhausted or task quota reached
     |
 print summary and exit
 ```
@@ -27,7 +27,9 @@ print summary and exit
 flowchart TD
     Scan[Scan report root once] --> Candidates{Runnable created/init candidates?}
     Candidates -- No --> Summary[Print summary and exit]
-    Candidates -- Yes --> Select[Select next candidate]
+    Candidates -- Yes --> Budget{Task quota reached?}
+    Budget -- Yes --> Summary
+    Budget -- No --> Select[Select next candidate]
     Select --> Claim{Atomic claim succeeds?}
     Claim -- Contended --> SkipContention[Count claim contention] --> More{More candidates?}
     Claim -- Error --> FailedClaim[Count failed and warn] --> More
@@ -39,7 +41,7 @@ flowchart TD
     Verify -- Yes --> Execute[Execute command]
     Execute --> Save[Save result with claim fencing]
     Save --> Release[Release claim] --> More
-    More -- Yes --> Select
+    More -- Yes --> Budget
     More -- No --> Summary
 ```
 
@@ -48,7 +50,10 @@ claim creation is the ownership boundary, and status writes are fenced by the
 claim token.
 
 There is no final rescan, idle scan, poll interval, pending queue, or wait for
-other workers. Work created after the snapshot belongs to a later invocation.
+other workers. A finite quota is based on successful completions, so contention,
+stale candidates, and failed executions do not end a worker early; the worker
+continues through the initial snapshot. Work created after the snapshot belongs
+to a later invocation.
 
 ## Why The Claim, Not The Ordering
 
