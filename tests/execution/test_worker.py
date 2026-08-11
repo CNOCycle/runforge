@@ -162,6 +162,52 @@ def test_worker_executes_recorded_commit_and_patch_then_cleans_worktree(tmp_path
     assert "runforge-worker-" not in git(repository, "worktree", "list", "--porcelain")
 
 
+def test_worker_builds_git_worktree_under_the_configured_root(tmp_path, monkeypatch):
+    repository = _repository(
+        tmp_path,
+        (
+            "from pathlib import Path\n"
+            "import os\n"
+            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
+            "artifact_dir.joinpath('worktree.txt').write_text(str(Path.cwd()))\n"
+        ),
+    )
+    configured_root = tmp_path / "configured-root"
+    configured_root.mkdir()
+    monkeypatch.setenv(sources_module.WORKER_ROOT_VARIABLE, str(configured_root))
+    experiment = plan_experiment(
+        PlanRequest(
+            name="configured-root",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=tmp_path / "reports",
+        )
+    )
+
+    assert run_experiment(experiment) == 0
+
+    worker_path = Path((experiment / "artifacts" / "worktree.txt").read_text(encoding="utf-8"))
+    assert worker_path.parent == configured_root
+    assert worker_path.parent != repository.parent
+    assert not worker_path.exists()
+
+
+def test_worker_reports_a_clear_error_for_an_unusable_configured_root(tmp_path, monkeypatch):
+    repository = _repository(tmp_path, "print('must not run')\n")
+    monkeypatch.setenv(sources_module.WORKER_ROOT_VARIABLE, str(tmp_path / "does-not-exist"))
+    experiment = plan_experiment(
+        PlanRequest(
+            name="bad-root",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=tmp_path / "reports",
+        )
+    )
+
+    with pytest.raises(WorkerError, match="Could not create worker workspace under"):
+        run_experiment(experiment)
+
+
 def test_worker_executes_pinned_commit_after_current_checkout_advances(tmp_path):
     repository = _repository(
         tmp_path,
@@ -537,6 +583,51 @@ def test_worker_executes_directory_snapshot_source_from_isolated_workspace(tmp_p
     assert status.state == "completed"
     assert status.attempt == 1
     assert status.exit_code == 0
+
+
+def test_worker_materializes_directory_snapshot_under_the_configured_root(tmp_path, monkeypatch):
+    source = _verified_directory_source(
+        tmp_path,
+        (
+            "from pathlib import Path\n"
+            "import os\n"
+            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
+            "artifact_dir.joinpath('cwd.txt').write_text(str(Path.cwd()))\n"
+        ),
+    )
+    configured_root = tmp_path / "configured-root"
+    configured_root.mkdir()
+    monkeypatch.setenv(sources_module.WORKER_ROOT_VARIABLE, str(configured_root))
+    experiment = plan_experiment(
+        PlanRequest(
+            name="snapshot-configured-root",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="directory-snapshot",
+        )
+    )
+
+    assert run_experiment(experiment) == 0
+
+    workspace = Path((experiment / "artifacts" / "cwd.txt").read_text(encoding="utf-8"))
+    assert workspace.parent.parent == configured_root
+
+
+def test_configured_workspace_root_reads_the_environment_variable(tmp_path, monkeypatch):
+    monkeypatch.setenv(sources_module.WORKER_ROOT_VARIABLE, str(tmp_path))
+    assert sources_module._configured_workspace_root() == tmp_path.resolve()
+
+
+def test_configured_workspace_root_is_unset_by_default(monkeypatch):
+    monkeypatch.delenv(sources_module.WORKER_ROOT_VARIABLE, raising=False)
+    assert sources_module._configured_workspace_root() is None
+
+
+@pytest.mark.parametrize("configured", ["", "   "])
+def test_configured_workspace_root_blank_value_is_unset(monkeypatch, configured):
+    monkeypatch.setenv(sources_module.WORKER_ROOT_VARIABLE, configured)
+    assert sources_module._configured_workspace_root() is None
 
 
 def test_worker_directory_snapshot_execution_does_not_modify_captured_source(tmp_path):

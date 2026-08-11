@@ -15,6 +15,7 @@ to carry.
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import tempfile
 from abc import ABC, abstractmethod
@@ -39,6 +40,28 @@ from runforge.schemas.source import GitSource
 
 SourceT = TypeVar("SourceT")
 
+WORKER_ROOT_VARIABLE = "RUNFORGE_WORKER_ROOT"
+
+
+def _configured_workspace_root() -> Path | None:
+    """Resolve the operator-configured worker workspace root, if any.
+
+    One explicitly named variable, mirroring ``RUNFORGE_CLAIM_OWNER``:
+    RunForge never snapshots the ambient environment, and a blank value falls
+    back to each mode's existing default (next to the Git repository, or the
+    OS default temporary location) rather than being treated as configured.
+    """
+    configured = os.environ.get(WORKER_ROOT_VARIABLE, "").strip()
+    return Path(configured).expanduser().resolve() if configured else None
+
+
+def _create_worker_workspace(root: Path | None) -> tempfile.TemporaryDirectory:
+    """Create the ``runforge-worker-`` temporary directory, reporting a bad root clearly."""
+    try:
+        return tempfile.TemporaryDirectory(prefix="runforge-worker-", dir=root)
+    except OSError as error:
+        raise WorkerError(f"Could not create worker workspace under {root}: {error}") from error
+
 
 class SourcePreparation(ABC, Generic[SourceT]):
     """Produce a verified working directory for one recorded source kind."""
@@ -60,7 +83,8 @@ class GitWorktreePreparation(SourcePreparation[GitSource]):
         except GitOperationError as error:
             raise WorkerError(str(error)) from error
 
-        with tempfile.TemporaryDirectory(prefix="runforge-worker-", dir=repository.root.parent) as temporary_root:
+        workspace_root = _configured_workspace_root() or repository.root.parent
+        with _create_worker_workspace(workspace_root) as temporary_root:
             worktree = Path(temporary_root)
             try:
                 repository.create_detached_worktree(worktree, source.commit)
@@ -107,7 +131,7 @@ class DirectorySnapshotPreparation(SourcePreparation[DirectorySnapshotSource]):
             source.tree_digest,
             changed_message="Captured directory-snapshot source has changed since planning",
         )
-        with tempfile.TemporaryDirectory(prefix="runforge-worker-") as temporary_root:
+        with _create_worker_workspace(_configured_workspace_root()) as temporary_root:
             workspace = Path(temporary_root) / "source"
             try:
                 shutil.copytree(snapshot_dir, workspace)
