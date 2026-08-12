@@ -73,6 +73,17 @@ its process ID, and a nonce distinguishing simultaneous workers from the
 same source. A `-nongit-` marker after the name means a directory-snapshot
 or verified-directory source, not a Git repository.
 
+For the full, untruncated identity — including who claimed the experiment
+that built it — read the workspace's manifest:
+
+```bash
+runforge worker-inspect PATH
+```
+
+This is read-only and safe to run on a live workspace; it only reports what
+the manifest already recorded when the workspace was created, not whether
+the worker is still running.
+
 For a Git-sourced leftover (no `-nongit-` marker), remove it as a worktree
 rather than a plain directory, so the repository's worktree registration is
 cleared too: `git worktree remove --force PATH`, run from the named

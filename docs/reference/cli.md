@@ -16,6 +16,7 @@ interact, and what each exit code means.
 | `retry` | Archives the prior attempt and runs the same plan again. | The command's exit code |
 | `discover` | Lists a report root. Read-only. | `0`, or `2` if any metadata is invalid |
 | `worker` | Executes available plans from one report root. | See below |
+| `worker-inspect` | Renders a worker workspace's manifest. Read-only. | `0`, or `2` on a bad workspace |
 
 `worker` exit codes carry more meaning than the rest:
 

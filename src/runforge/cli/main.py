@@ -19,6 +19,8 @@ from runforge.cli.output import (
     print_retry_arguments,
     print_run_arguments,
     print_worker_arguments,
+    print_worker_inspect_arguments,
+    print_worker_manifest_file,
     print_worker_progress,
     print_worker_summary,
 )
@@ -83,6 +85,12 @@ def _run_matrix_command(arguments: argparse.Namespace) -> int:
 def _run_matrix_show_command(arguments: argparse.Namespace) -> int:
     print_matrix_show_arguments(arguments)
     print_matrix_mapping_file(arguments.artifact)
+    return 0
+
+
+def _run_worker_inspect_command(arguments: argparse.Namespace) -> int:
+    print_worker_inspect_arguments(arguments)
+    print_worker_manifest_file(arguments.workspace)
     return 0
 
 
@@ -161,6 +169,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "launch": _run_plan_command,
     "matrix": _run_matrix_command,
     "matrix-show": _run_matrix_show_command,
+    "worker-inspect": _run_worker_inspect_command,
     "run": _run_run_command,
     "retry": _run_retry_command,
     "discover": _run_discover_command,

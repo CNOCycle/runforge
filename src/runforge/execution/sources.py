@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import socket
 import tempfile
 import uuid
 from abc import ABC, abstractmethod
@@ -26,9 +27,11 @@ from pathlib import Path
 from typing import Generic, Literal, TypeVar
 
 from runforge.execution.errors import WorkerError
+from runforge.infrastructure.claims import ExperimentClaim
 from runforge.infrastructure.clock import utc_compact_timestamp
 from runforge.infrastructure.directory_scan import DirectoryScanError, ScannedFile, scan_directory
 from runforge.infrastructure.git import GitOperationError, GitRepository
+from runforge.infrastructure.json_store import JsonStoreError, load_json_object, save_json_object
 from runforge.infrastructure.paths import is_safe_directory
 from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.schemas.directory_source import (
@@ -39,6 +42,7 @@ from runforge.schemas.directory_source import (
     VerifiedDirectorySource,
 )
 from runforge.schemas.source import GitSource
+from runforge.schemas.worker_manifest import WORKER_MANIFEST_FILE, WorkerManifest
 
 
 SourceT = TypeVar("SourceT")
@@ -92,12 +96,44 @@ def _reserve_worker_workspace(root: Path | None, source_slug: str, source_digest
     raise WorkerError(f"Could not create a unique worker workspace under {parent}: {last_error}")
 
 
+def _write_worker_manifest(
+    workspace: Path,
+    *,
+    source_kind: Literal["git", "directory-snapshot"],
+    source_identity: str,
+    source_reference: str,
+    claim: ExperimentClaim,
+) -> None:
+    """Persist the versioned manifest identifying who built one worker workspace and from what."""
+    manifest = WorkerManifest(
+        source_kind=source_kind,
+        source_identity=source_identity,
+        source_reference=source_reference,
+        host=socket.gethostname(),
+        pid=os.getpid(),
+        owner=claim.owner,
+        worker_id=claim.token,
+        started_at=claim.acquired_at,
+    )
+    try:
+        save_json_object(workspace / WORKER_MANIFEST_FILE, manifest.to_dict())
+    except (OSError, JsonStoreError) as error:
+        raise WorkerError(f"Could not write worker workspace manifest: {error}") from error
+
+
+def load_worker_manifest(workspace: Path) -> WorkerManifest:
+    """Load the versioned manifest inside one worker workspace directory, for read-only inspection."""
+    return WorkerManifest.from_dict(load_json_object(workspace / WORKER_MANIFEST_FILE))
+
+
 class SourcePreparation(ABC, Generic[SourceT]):
     """Produce a verified working directory for one recorded source kind."""
 
     @abstractmethod
     @contextmanager
-    def working_directory(self, experiment: ExperimentDirectory, source: SourceT) -> Iterator[Path]:
+    def working_directory(
+        self, experiment: ExperimentDirectory, source: SourceT, claim: ExperimentClaim
+    ) -> Iterator[Path]:
         """Verify the source and yield the directory the command should run in."""
         raise NotImplementedError
 
@@ -106,7 +142,9 @@ class GitWorktreePreparation(SourcePreparation[GitSource]):
     """Build a detached worktree at the recorded commit and apply any patch."""
 
     @contextmanager
-    def working_directory(self, experiment: ExperimentDirectory, source: GitSource) -> Iterator[Path]:
+    def working_directory(
+        self, experiment: ExperimentDirectory, source: GitSource, claim: ExperimentClaim
+    ) -> Iterator[Path]:
         try:
             repository = GitRepository.locate(source.repository)
         except GitOperationError as error:
@@ -116,6 +154,13 @@ class GitWorktreePreparation(SourcePreparation[GitSource]):
         worktree = _reserve_worker_workspace(workspace_root, repository.root.name, source.commit[:8], non_git=False)
         try:
             repository.create_detached_worktree(worktree, source.commit)
+            _write_worker_manifest(
+                worktree,
+                source_kind="git",
+                source_identity=str(repository.root),
+                source_reference=source.commit,
+                claim=claim,
+            )
             _apply_recorded_patch(repository, worktree, experiment, source.patch_file, source.patch_sha256)
             yield worktree
         except GitOperationError as error:
@@ -132,7 +177,11 @@ class VerifiedDirectoryPreparation(SourcePreparation[VerifiedDirectorySource]):
     """Re-verify an external directory and execute it where it stands."""
 
     @contextmanager
-    def working_directory(self, experiment: ExperimentDirectory, source: VerifiedDirectorySource) -> Iterator[Path]:
+    def working_directory(
+        self, experiment: ExperimentDirectory, source: VerifiedDirectorySource, claim: ExperimentClaim
+    ) -> Iterator[Path]:
+        # No ephemeral workspace is built here, so there is nothing to manifest;
+        # `claim` is accepted only to satisfy the shared SourcePreparation signature.
         if not is_safe_directory(source.path):
             raise WorkerError(f"Verified-directory source is missing or not a directory: {source.path}")
         _verify_directory_matches_manifest(
@@ -149,7 +198,9 @@ class DirectorySnapshotPreparation(SourcePreparation[DirectorySnapshotSource]):
     """Materialize the captured copy in an isolated workspace and verify it again."""
 
     @contextmanager
-    def working_directory(self, experiment: ExperimentDirectory, source: DirectorySnapshotSource) -> Iterator[Path]:
+    def working_directory(
+        self, experiment: ExperimentDirectory, source: DirectorySnapshotSource, claim: ExperimentClaim
+    ) -> Iterator[Path]:
         snapshot_dir = experiment.snapshot_source_directory
         if not is_safe_directory(snapshot_dir):
             raise WorkerError(f"Captured directory-snapshot source is missing: {snapshot_dir}")
@@ -163,6 +214,13 @@ class DirectorySnapshotPreparation(SourcePreparation[DirectorySnapshotSource]):
             _configured_workspace_root(), source.original_path.name, source.tree_digest[:8], non_git=True
         )
         try:
+            _write_worker_manifest(
+                container,
+                source_kind="directory-snapshot",
+                source_identity=str(source.original_path),
+                source_reference=source.tree_digest,
+                claim=claim,
+            )
             workspace = container / DIRECTORY_SNAPSHOT_DIRECTORY
             try:
                 shutil.copytree(snapshot_dir, workspace)

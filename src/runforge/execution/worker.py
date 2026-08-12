@@ -326,7 +326,7 @@ def _execute(
 ) -> int:
     """Prepare the recorded source, then run the command in the prepared directory."""
     preparation = preparation_for(configuration.source)
-    with preparation.working_directory(experiment, configuration.source) as working_directory:
+    with preparation.working_directory(experiment, configuration.source, options.claim) as working_directory:
         return _run_in_working_directory(experiment, configuration, status, working_directory, options)
 
 

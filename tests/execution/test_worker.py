@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -20,10 +21,12 @@ from runforge.planning.inputs import InputTemplate
 from runforge.planning.planner import PlanRequest, plan_experiment
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.schemas.source import PinnedGitSource
+from runforge.schemas.worker_manifest import WorkerManifest
 from tests.support import create_git_repository, git
 
 
 FAILURE_EXIT_CODE = 7
+SHA256_DIGEST_LENGTH = 64
 
 
 def _repository(tmp_path: Path, script: str) -> Path:
@@ -237,6 +240,40 @@ def test_worker_git_workspace_name_matches_the_naming_contract(tmp_path):
         rf"runforge-worker-repository-[0-9a-f]{{8}}-\d{{8}}T\d{{6}}Z-p{os.getpid()}-[0-9a-f]{{4}}",
         worker_path.name,
     )
+
+
+def test_worker_git_workspace_manifest_records_source_and_claim_identity(tmp_path):
+    repository = _repository(
+        tmp_path,
+        (
+            "import shutil\n"
+            "from pathlib import Path\n"
+            "import os\n"
+            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
+            "shutil.copy('runforge-worker.json', artifact_dir / 'manifest.json')\n"
+        ),
+    )
+    commit = git(repository, "rev-parse", "HEAD")
+    experiment = plan_experiment(
+        PlanRequest(
+            name="manifest",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=tmp_path / "reports",
+        )
+    )
+
+    assert run_experiment(experiment) == 0
+
+    manifest = WorkerManifest.from_dict(
+        json.loads((experiment / "artifacts" / "manifest.json").read_text(encoding="utf-8"))
+    )
+    assert manifest.source_kind == "git"
+    assert manifest.source_identity == str(repository.resolve())
+    assert manifest.source_reference == commit
+    assert manifest.pid == os.getpid()
+    assert manifest.worker_id
+    assert manifest.owner
 
 
 def test_worker_executes_pinned_commit_after_current_checkout_advances(tmp_path):
@@ -675,6 +712,41 @@ def test_worker_snapshot_workspace_name_matches_the_naming_contract(tmp_path):
         rf"runforge-worker-source-nongit-[0-9a-f]{{8}}-\d{{8}}T\d{{6}}Z-p{os.getpid()}-[0-9a-f]{{4}}",
         workspace.parent.name,
     )
+
+
+def test_worker_snapshot_workspace_manifest_records_source_and_claim_identity(tmp_path):
+    source = _verified_directory_source(
+        tmp_path,
+        (
+            "import shutil\n"
+            "from pathlib import Path\n"
+            "import os\n"
+            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
+            "manifest_path = Path.cwd().parent / 'runforge-worker.json'\n"
+            "shutil.copy(manifest_path, artifact_dir / 'manifest.json')\n"
+        ),
+    )
+    experiment = plan_experiment(
+        PlanRequest(
+            name="manifest-snapshot",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="directory-snapshot",
+        )
+    )
+
+    assert run_experiment(experiment) == 0
+
+    manifest = WorkerManifest.from_dict(
+        json.loads((experiment / "artifacts" / "manifest.json").read_text(encoding="utf-8"))
+    )
+    assert manifest.source_kind == "directory-snapshot"
+    assert manifest.source_identity == str(source.resolve())
+    assert len(manifest.source_reference) == SHA256_DIGEST_LENGTH
+    assert manifest.pid == os.getpid()
+    assert manifest.worker_id
+    assert manifest.owner
 
 
 def test_configured_workspace_root_reads_the_environment_variable(tmp_path, monkeypatch):

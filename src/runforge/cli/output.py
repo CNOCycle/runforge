@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from runforge.execution.discovery import DiscoveryResult
+from runforge.execution.sources import load_worker_manifest
 from runforge.execution.worker import WorkerProgressEvent, WorkerResult
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.infrastructure.storage import ExperimentDirectory
@@ -155,6 +156,25 @@ def print_matrix_mapping_file(path: Path) -> None:
     mapping = load_matrix_mapping(path)
     print(f"Matrix identity: {mapping.matrix_id}")
     print_matrix_mapping(mapping)
+
+
+def print_worker_inspect_arguments(arguments: argparse.Namespace) -> None:
+    """Print the effective workspace path for read-only manifest inspection."""
+    _print_effective_arguments("worker-inspect", [("workspace", path_text(arguments.workspace))])
+
+
+def print_worker_manifest_file(workspace: Path) -> None:
+    """Load and render the manifest inside one worker workspace directory."""
+    manifest = load_worker_manifest(workspace)
+    print(f"Worker workspace manifest ({workspace.name}):")
+    print(f"  source kind: {manifest.source_kind}")
+    print(f"  source identity: {manifest.source_identity}")
+    print(f"  source reference: {manifest.source_reference}")
+    print(f"  host: {manifest.host}")
+    print(f"  pid: {manifest.pid}")
+    print(f"  owner: {manifest.owner}")
+    print(f"  worker id: {manifest.worker_id}")
+    print(f"  started at: {manifest.started_at}")
 
 
 def print_discover_arguments(arguments: argparse.Namespace) -> None:

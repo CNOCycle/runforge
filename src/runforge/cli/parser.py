@@ -86,6 +86,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="matrix mapping JSON artifact written beside the generated experiment directories",
     )
 
+    worker_inspect = subparsers.add_parser(
+        "worker-inspect",
+        help="render a worker workspace manifest",
+        description=(
+            "Render the runforge-worker.json manifest inside one worker workspace directory "
+            "(a runforge-worker-* directory). This command only inspects; it never executes "
+            "commands or removes anything."
+        ),
+        formatter_class=SemanticDefaultsHelpFormatter,
+    )
+    worker_inspect.add_argument(
+        "workspace",
+        type=Path,
+        help="worker workspace directory (a runforge-worker-* directory) to inspect",
+    )
+
     run = subparsers.add_parser(
         "run",
         help="execute one explicit planned experiment directory",
