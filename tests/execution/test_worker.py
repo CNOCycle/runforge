@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -579,6 +580,9 @@ def test_worker_executes_directory_snapshot_source_from_isolated_workspace(tmp_p
     assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "base"
     assert workspace.name == "source"
     assert workspace.parent.name.startswith("runforge-worker-")
+    # Resolve both sides: Path.cwd() inside the child process may come back
+    # kernel-resolved even when tempfile.gettempdir() itself is not.
+    assert workspace.parent.parent.resolve() == Path(tempfile.gettempdir()).resolve()
     assert not workspace.exists()
     assert status.state == "completed"
     assert status.attempt == 1
