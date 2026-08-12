@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta
 from pathlib import Path
 
+from runforge.infrastructure.clock import parse_utc
+from runforge.infrastructure.duration import DurationError, parse_duration
 from runforge.version import display_version
 
 
@@ -17,6 +20,22 @@ def _positive_integer(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be a positive integer")
     return parsed
+
+
+def _duration_argument(value: str) -> timedelta:
+    """Parse a --older-than CLI value into a timedelta."""
+    try:
+        return parse_duration(value)
+    except DurationError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _utc_timestamp_argument(value: str) -> datetime:
+    """Parse a --updated-before CLI value into an aware UTC datetime."""
+    try:
+        return parse_utc(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a UTC ISO 8601 timestamp (e.g. 2026-08-01T00:00:00Z)") from error
 
 
 class SemanticDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
@@ -173,6 +192,25 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         default=Path("."),
         help="directory to scan recursively (default: current directory)",
+    )
+    staleness_group = discover.add_mutually_exclusive_group()
+    staleness_group.add_argument(
+        "--older-than",
+        type=_duration_argument,
+        metavar="DURATION",
+        help=(
+            "flag inprogress experiments started more than DURATION ago, e.g. 6h, 30m, 2d "
+            "(default: not set; a hint only, never automatic recovery)"
+        ),
+    )
+    staleness_group.add_argument(
+        "--updated-before",
+        type=_utc_timestamp_argument,
+        metavar="TIMESTAMP",
+        help=(
+            "flag inprogress experiments started before this UTC ISO 8601 timestamp "
+            "(default: not set; a hint only, never automatic recovery)"
+        ),
     )
 
     worker = subparsers.add_parser(

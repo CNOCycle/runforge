@@ -6,6 +6,7 @@ import argparse
 import sys
 import warnings
 from collections.abc import Callable, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 
 from runforge.cli.output import (
@@ -155,10 +156,19 @@ def _run_retry_command(arguments: argparse.Namespace) -> int:
 
 
 def _run_discover_command(arguments: argparse.Namespace) -> int:
-    print_discover_arguments(arguments)
+    cutoff = _resolve_stale_cutoff(arguments)
+    print_discover_arguments(arguments, stale_cutoff=cutoff)
     result = discover_experiments(arguments.root)
-    print_discovery(result)
+    print_discovery(result, stale_cutoff=cutoff)
     return 2 if result.diagnostics else 0
+
+
+def _resolve_stale_cutoff(arguments: argparse.Namespace) -> datetime | None:
+    if arguments.older_than is not None:
+        return datetime.now(timezone.utc) - arguments.older_than
+    if arguments.updated_before is not None:
+        return arguments.updated_before
+    return None
 
 
 def _run_worker_command(arguments: argparse.Namespace) -> int:
