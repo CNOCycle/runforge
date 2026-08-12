@@ -86,6 +86,51 @@ def build_parser() -> argparse.ArgumentParser:
         help="matrix mapping JSON artifact written beside the generated experiment directories",
     )
 
+    worker_inspect = subparsers.add_parser(
+        "worker-inspect",
+        help="render a worker workspace manifest",
+        description=(
+            "Render the runforge-worker.json manifest inside one worker workspace directory "
+            "(a runforge-worker-* directory). This command only inspects; it never executes "
+            "commands or removes anything."
+        ),
+        formatter_class=SemanticDefaultsHelpFormatter,
+    )
+    worker_inspect.add_argument(
+        "workspace",
+        type=Path,
+        help="worker workspace directory (a runforge-worker-* directory) to inspect",
+    )
+
+    worker_cleanup = subparsers.add_parser(
+        "worker-cleanup",
+        help="list, and with explicit confirmation remove, leftover worker workspaces",
+        description=(
+            "List every runforge-worker-* directory directly under one root -- workspaces a killed "
+            "worker left behind. Never removes anything by itself, and never selects a workspace by "
+            "age: pass --confirm with the exact discovered paths to remove, one invocation at a time. "
+            "A Git-sourced workspace is deregistered as a worktree, not just deleted."
+        ),
+        formatter_class=SemanticDefaultsHelpFormatter,
+    )
+    worker_cleanup.add_argument(
+        "root",
+        type=Path,
+        nargs="?",
+        default=None,
+        help=(
+            "directory to scan for runforge-worker-* directories "
+            "(default: RUNFORGE_WORKER_ROOT if set, else current directory)"
+        ),
+    )
+    worker_cleanup.add_argument(
+        "--confirm",
+        type=Path,
+        nargs="+",
+        metavar="WORKSPACE",
+        help="remove exactly these discovered workspace directories (default: list only, remove nothing)",
+    )
+
     run = subparsers.add_parser(
         "run",
         help="execute one explicit planned experiment directory",

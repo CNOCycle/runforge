@@ -18,6 +18,18 @@ Workers must also be able to reach the recorded source path. A Git-backed plan
 records a repository location; a `verified-directory` plan records an absolute
 directory that must exist at the same path on every worker.
 
+## Worker Workspace Placement
+
+By default a worker builds its temporary Git worktree next to the source
+repository, and materializes a directory-snapshot source under the OS default
+temporary directory. Set `RUNFORGE_WORKER_ROOT` to use one explicit directory
+instead — useful when the repository's location is read-only or too small to
+hold a worktree, or when the host's default temp directory is a small
+RAM-backed tmpfs. The directory must already exist and be writable by the
+worker; RunForge does not create it, and does not require it to be shared
+across hosts (each worker still builds and tears down its own private
+workspace there).
+
 ## What Is And Is Not Proven
 
 A local POSIX filesystem is the reference environment, and the cross-process

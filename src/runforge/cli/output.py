@@ -12,7 +12,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from runforge.execution.discovery import DiscoveryResult
+from runforge.execution.sources import load_worker_manifest
 from runforge.execution.worker import WorkerProgressEvent, WorkerResult
+from runforge.execution.workspace_cleanup import DiscoveredWorkspace
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.planning.matrix_mapping import MatrixMapping, load_matrix_mapping
@@ -155,6 +157,54 @@ def print_matrix_mapping_file(path: Path) -> None:
     mapping = load_matrix_mapping(path)
     print(f"Matrix identity: {mapping.matrix_id}")
     print_matrix_mapping(mapping)
+
+
+def print_worker_inspect_arguments(arguments: argparse.Namespace) -> None:
+    """Print the effective workspace path for read-only manifest inspection."""
+    _print_effective_arguments("worker-inspect", [("workspace", path_text(arguments.workspace))])
+
+
+def print_worker_manifest_file(workspace: Path) -> None:
+    """Load and render the manifest inside one worker workspace directory."""
+    manifest = load_worker_manifest(workspace)
+    print(f"Worker workspace manifest ({workspace.name}):")
+    print(f"  source kind: {manifest.source_kind}")
+    print(f"  source identity: {manifest.source_identity}")
+    print(f"  source reference: {manifest.source_reference}")
+    print(f"  host: {manifest.host}")
+    print(f"  pid: {manifest.pid}")
+    print(f"  owner: {manifest.owner}")
+    print(f"  worker id: {manifest.worker_id}")
+    print(f"  started at: {manifest.started_at}")
+
+
+def print_worker_cleanup_arguments(arguments: argparse.Namespace, root: Path) -> None:
+    """Print the effective scan root and confirmation targets for workspace cleanup."""
+    confirm = "not set (list only)" if arguments.confirm is None else ", ".join(path_text(p) for p in arguments.confirm)
+    _print_effective_arguments("worker-cleanup", [("root", path_text(root)), ("confirm", confirm)])
+
+
+def print_discovered_workspaces(discovered: Sequence[DiscoveredWorkspace]) -> None:
+    """List every discovered worker workspace and, when readable, its manifest summary."""
+    print(f"Worker workspaces found ({len(discovered)}):")
+    if not discovered:
+        print("  none")
+        return
+    for workspace in discovered:
+        if workspace.manifest is not None:
+            manifest = workspace.manifest
+            print(
+                f"  {workspace.path.name}\n"
+                f"    source: {manifest.source_kind} {manifest.source_identity} @ {manifest.source_reference}\n"
+                f"    owner: {manifest.owner}, started: {manifest.started_at}"
+            )
+        else:
+            print(f"  {workspace.path.name}\n    manifest unavailable: {workspace.manifest_error}")
+
+
+def print_removed_workspace(path: Path) -> None:
+    """Report one worker workspace removed after explicit confirmation."""
+    print(f"Removed: {path}", flush=True)
 
 
 def print_discover_arguments(arguments: argparse.Namespace) -> None:
