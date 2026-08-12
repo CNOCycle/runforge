@@ -1,15 +1,12 @@
 # Workers And Recovery
 
-A report root can hold plans from any source — a matrix expansion, individual
-`plan`/`launch` invocations, or a mix of both under the same folder — and
-`discover` doesn't care which produced a given one: it recursively reports
-the status of everything it finds there. Once there are enough that you want
-to consume them from more than one process, or one was interrupted (including
-killed by the system, not just failing normally), you need a way to find it
-regardless of origin.
+`discover` recursively reports the status of every plan under a report root.
+Once there are enough that you want to consume them from more than one
+process, or one was interrupted — including killed by the system, not just
+failing normally — you need a way to find it.
 
-This guide covers inspecting planned work and its status irrespective of
-origin, executing it safely in parallel, and the one supported recovery path.
+This guide covers inspecting planned work and its status, executing it safely
+in parallel, and the one supported recovery path.
 
 ## Inspecting Without Executing
 
