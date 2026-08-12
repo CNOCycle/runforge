@@ -36,6 +36,17 @@ def test_discover_workspaces_finds_only_matching_directories(tmp_path):
     ]
 
 
+def test_discover_workspaces_excludes_a_symlinked_candidate(tmp_path):
+    real_target = tmp_path / "elsewhere" / "runforge-worker-repo_A-865dc691-20260730T181530Z-p1-aaaa"
+    real_target.mkdir(parents=True)
+    linked = tmp_path / "runforge-worker-repo_B-97488696-20260730T182011Z-p2-bbbb"
+    linked.symlink_to(real_target, target_is_directory=True)
+
+    discovered = discover_workspaces(tmp_path)
+
+    assert discovered == ()
+
+
 def test_discover_workspaces_reports_a_readable_manifest(tmp_path):
     workspace = tmp_path / "runforge-worker-repo_A-865dc691-20260730T181530Z-p1-aaaa"
     workspace.mkdir()

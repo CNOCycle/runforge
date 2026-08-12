@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import shlex
 import shutil
 import uuid
@@ -14,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from runforge.infrastructure.clock import utc_now
+from runforge.infrastructure.slug import slugify
 from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.planning.directory_source import (
     DirectorySourceResolutionError,
@@ -35,7 +35,6 @@ from runforge.schemas.inputs import PlannedInput, PlannedInputManifest
 from runforge.schemas.source import GitSource, PinnedGitSource
 
 
-_SLUG_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 _COMMIT_PREFIX_LENGTH = 8
 _DEFAULT_OUTPUT_ROOT = Path("reports")
 _DIRECTORY_SOURCE_MODES = frozenset({"verified-directory", "directory-snapshot"})
@@ -386,9 +385,9 @@ def _destination(
     name: str,
     reserved: set[Path] | None = None,
 ) -> Path:
-    parent = output_root.expanduser().resolve() / _slug(band, "band")
+    parent = output_root.expanduser().resolve() / slugify(band, "band")
     parent.mkdir(parents=True, exist_ok=True)
-    prefix = f"{identity[:_COMMIT_PREFIX_LENGTH]}_{_slug(name, 'experiment')}"
+    prefix = f"{identity[:_COMMIT_PREFIX_LENGTH]}_{slugify(name, 'experiment')}"
     index = 0
     while True:
         destination = parent / f"{prefix}_{index:04d}"
@@ -452,8 +451,3 @@ def _write_command_file(path: Path, command: ExperimentCommand) -> None:
     command_text = command.script if command.mode == "shell" else shlex.join(command.arguments)
     path.write_text(f"#!/bin/sh\n{command_text}\n", encoding="utf-8")
     path.chmod(0o755)
-
-
-def _slug(value: str, fallback: str) -> str:
-    slug = _SLUG_PATTERN.sub("-", value.strip()).strip("-._")
-    return (slug or fallback)[:64]

@@ -276,6 +276,36 @@ def test_worker_git_workspace_manifest_records_source_and_claim_identity(tmp_pat
     assert manifest.owner
 
 
+def test_worker_git_workspace_name_is_filesystem_safe_for_an_unsafe_repository_name(tmp_path):
+    repository = create_git_repository(
+        tmp_path / "repo with spaces:windows?",
+        {
+            "train.py": (
+                "from pathlib import Path\n"
+                "import os\n"
+                "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
+                "artifact_dir.joinpath('worktree.txt').write_text(str(Path.cwd()))\n"
+            )
+        },
+    )
+    experiment = plan_experiment(
+        PlanRequest(
+            name="unsafe-name",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=tmp_path / "reports",
+        )
+    )
+
+    assert run_experiment(experiment) == 0
+
+    worker_path = Path((experiment / "artifacts" / "worktree.txt").read_text(encoding="utf-8"))
+    assert re.fullmatch(
+        rf"runforge-worker-repo-with-spaces-windows-[0-9a-f]{{8}}-\d{{8}}T\d{{6}}Z-p{os.getpid()}-[0-9a-f]{{4}}",
+        worker_path.name,
+    )
+
+
 def test_worker_executes_pinned_commit_after_current_checkout_advances(tmp_path):
     repository = _repository(
         tmp_path,

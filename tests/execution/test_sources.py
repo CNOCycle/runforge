@@ -31,6 +31,33 @@ def test_worker_workspace_name_matches_the_non_git_naming_contract():
     )
 
 
+@pytest.mark.parametrize(
+    "raw_slug",
+    [
+        "repo with spaces",
+        "repo:windows?",
+        "repo/with/slashes",
+        "  ../../etc  ",
+        "",
+        "????",
+    ],
+)
+def test_worker_workspace_name_slugifies_unusual_source_names(raw_slug):
+    name = sources_module._worker_workspace_name(raw_slug, "865dc691", non_git=False)
+
+    assert re.fullmatch(r"runforge-worker-[A-Za-z0-9._-]+-865dc691-\d{8}T\d{6}Z-p\d+-[0-9a-f]{4}", name)
+    assert "/" not in name
+    assert " " not in name
+
+
+def test_reserve_worker_workspace_creates_a_real_directory_for_an_unsafe_source_name(tmp_path):
+    result = sources_module._reserve_worker_workspace(tmp_path, "repo with spaces:windows?", "865dc691", non_git=False)
+
+    assert result.is_dir()
+    assert result.parent == tmp_path
+    assert re.fullmatch(r"runforge-worker-repo-with-spaces-windows-865dc691-.+", result.name)
+
+
 def test_reserve_worker_workspace_creates_and_returns_the_directory(tmp_path):
     result = sources_module._reserve_worker_workspace(tmp_path, "repo_A", "865dc691", non_git=False)
     assert result.is_dir()

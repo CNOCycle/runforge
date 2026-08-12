@@ -33,6 +33,7 @@ from runforge.infrastructure.directory_scan import DirectoryScanError, ScannedFi
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.infrastructure.json_store import JsonStoreError, load_json_object, save_json_object
 from runforge.infrastructure.paths import is_safe_directory
+from runforge.infrastructure.slug import slugify
 from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.schemas.directory_source import (
     DIRECTORY_SNAPSHOT_DIRECTORY,
@@ -74,11 +75,18 @@ def _worker_workspace_name(source_slug: str, source_digest8: str, *, non_git: bo
     leftover workspace names the repository or source directory, the commit or
     content digest, when it started, and which process built it -- an operator
     no longer has to guess from an opaque hash alone which source produced it.
+
+    ``source_slug`` is an arbitrary repository or source-directory name, not
+    something RunForge controls the characters of, so it is slugified the
+    same way planning derives its own directory names -- otherwise a name
+    like ``repo with spaces`` or ``repo:windows?`` would break the documented
+    filesystem-safe contract.
     """
+    slug = slugify(source_slug, "source")
     marker = "-nongit" if non_git else ""
     nonce = uuid.uuid4().hex[:4]
     stamp = utc_compact_timestamp()
-    return f"{WORKSPACE_NAME_PREFIX}{source_slug}{marker}-{source_digest8}-{stamp}-p{os.getpid()}-{nonce}"
+    return f"{WORKSPACE_NAME_PREFIX}{slug}{marker}-{source_digest8}-{stamp}-p{os.getpid()}-{nonce}"
 
 
 def _reserve_worker_workspace(root: Path | None, source_slug: str, source_digest8: str, *, non_git: bool) -> Path:
