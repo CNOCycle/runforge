@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -207,6 +209,34 @@ def test_worker_reports_a_clear_error_for_an_unusable_configured_root(tmp_path, 
 
     with pytest.raises(WorkerError, match="Could not create worker workspace under"):
         run_experiment(experiment)
+
+
+def test_worker_git_workspace_name_matches_the_naming_contract(tmp_path):
+    repository = _repository(
+        tmp_path,
+        (
+            "from pathlib import Path\n"
+            "import os\n"
+            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
+            "artifact_dir.joinpath('worktree.txt').write_text(str(Path.cwd()))\n"
+        ),
+    )
+    experiment = plan_experiment(
+        PlanRequest(
+            name="naming",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=repository,
+            output_root=tmp_path / "reports",
+        )
+    )
+
+    assert run_experiment(experiment) == 0
+
+    worker_path = Path((experiment / "artifacts" / "worktree.txt").read_text(encoding="utf-8"))
+    assert re.fullmatch(
+        rf"runforge-worker-repository-[0-9a-f]{{8}}-\d{{8}}T\d{{6}}Z-p{os.getpid()}-[0-9a-f]{{4}}",
+        worker_path.name,
+    )
 
 
 def test_worker_executes_pinned_commit_after_current_checkout_advances(tmp_path):
@@ -616,6 +646,35 @@ def test_worker_materializes_directory_snapshot_under_the_configured_root(tmp_pa
 
     workspace = Path((experiment / "artifacts" / "cwd.txt").read_text(encoding="utf-8"))
     assert workspace.parent.parent == configured_root
+
+
+def test_worker_snapshot_workspace_name_matches_the_naming_contract(tmp_path):
+    source = _verified_directory_source(
+        tmp_path,
+        (
+            "from pathlib import Path\n"
+            "import os\n"
+            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
+            "artifact_dir.joinpath('cwd.txt').write_text(str(Path.cwd()))\n"
+        ),
+    )
+    experiment = plan_experiment(
+        PlanRequest(
+            name="naming-snapshot",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="directory-snapshot",
+        )
+    )
+
+    assert run_experiment(experiment) == 0
+
+    workspace = Path((experiment / "artifacts" / "cwd.txt").read_text(encoding="utf-8"))
+    assert re.fullmatch(
+        rf"runforge-worker-source-nongit-[0-9a-f]{{8}}-\d{{8}}T\d{{6}}Z-p{os.getpid()}-[0-9a-f]{{4}}",
+        workspace.parent.name,
+    )
 
 
 def test_configured_workspace_root_reads_the_environment_variable(tmp_path, monkeypatch):

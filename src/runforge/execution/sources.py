@@ -18,6 +18,7 @@ import hashlib
 import os
 import shutil
 import tempfile
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -25,11 +26,13 @@ from pathlib import Path
 from typing import Generic, Literal, TypeVar
 
 from runforge.execution.errors import WorkerError
+from runforge.infrastructure.clock import utc_compact_timestamp
 from runforge.infrastructure.directory_scan import DirectoryScanError, ScannedFile, scan_directory
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.infrastructure.paths import is_safe_directory
 from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.schemas.directory_source import (
+    DIRECTORY_SNAPSHOT_DIRECTORY,
     DirectorySnapshotSource,
     DirectorySourceEntry,
     DirectorySourceManifest,
@@ -55,12 +58,38 @@ def _configured_workspace_root() -> Path | None:
     return Path(configured).expanduser().resolve() if configured else None
 
 
-def _create_worker_workspace(root: Path | None) -> tempfile.TemporaryDirectory:
-    """Create the ``runforge-worker-`` temporary directory, reporting a bad root clearly."""
-    try:
-        return tempfile.TemporaryDirectory(prefix="runforge-worker-", dir=root)
-    except OSError as error:
-        raise WorkerError(f"Could not create worker workspace under {root}: {error}") from error
+_WORKSPACE_NAME_ATTEMPTS = 5
+
+
+def _worker_workspace_name(source_slug: str, source_digest8: str, *, non_git: bool) -> str:
+    """Build one descriptive, collision-resistant worker workspace directory name.
+
+    ``runforge-worker-{SOURCE_SLUG}-{SOURCE8}-{UTC_TIMESTAMP}-p{PID}-{NONCE}``,
+    with a literal ``-nongit`` marker after the slug for non-Git sources, so a
+    leftover workspace names the repository or source directory, the commit or
+    content digest, when it started, and which process built it -- an operator
+    no longer has to guess from an opaque hash alone which source produced it.
+    """
+    marker = "-nongit" if non_git else ""
+    nonce = uuid.uuid4().hex[:4]
+    return f"runforge-worker-{source_slug}{marker}-{source_digest8}-{utc_compact_timestamp()}-p{os.getpid()}-{nonce}"
+
+
+def _reserve_worker_workspace(root: Path | None, source_slug: str, source_digest8: str, *, non_git: bool) -> Path:
+    """Create and return one empty, descriptively-named worker workspace directory."""
+    parent = root if root is not None else Path(tempfile.gettempdir())
+    last_error: OSError | None = None
+    for _ in range(_WORKSPACE_NAME_ATTEMPTS):
+        candidate = parent / _worker_workspace_name(source_slug, source_digest8, non_git=non_git)
+        try:
+            candidate.mkdir(parents=False)
+            return candidate
+        except FileExistsError as error:
+            last_error = error
+            continue
+        except OSError as error:
+            raise WorkerError(f"Could not create worker workspace under {parent}: {error}") from error
+    raise WorkerError(f"Could not create a unique worker workspace under {parent}: {last_error}")
 
 
 class SourcePreparation(ABC, Generic[SourceT]):
@@ -84,20 +113,19 @@ class GitWorktreePreparation(SourcePreparation[GitSource]):
             raise WorkerError(str(error)) from error
 
         workspace_root = _configured_workspace_root() or repository.root.parent
-        with _create_worker_workspace(workspace_root) as temporary_root:
-            worktree = Path(temporary_root)
-            try:
-                repository.create_detached_worktree(worktree, source.commit)
-                _apply_recorded_patch(repository, worktree, experiment, source.patch_file, source.patch_sha256)
-                yield worktree
-            except GitOperationError as error:
-                raise WorkerError(str(error)) from error
-            finally:
-                if worktree.exists():
-                    try:
-                        repository.remove_worktree(worktree)
-                    except GitOperationError as error:
-                        raise WorkerError(f"Could not clean up worktree: {error}") from error
+        worktree = _reserve_worker_workspace(workspace_root, repository.root.name, source.commit[:8], non_git=False)
+        try:
+            repository.create_detached_worktree(worktree, source.commit)
+            _apply_recorded_patch(repository, worktree, experiment, source.patch_file, source.patch_sha256)
+            yield worktree
+        except GitOperationError as error:
+            raise WorkerError(str(error)) from error
+        finally:
+            if worktree.exists():
+                try:
+                    repository.remove_worktree(worktree)
+                except GitOperationError as error:
+                    raise WorkerError(f"Could not clean up worktree: {error}") from error
 
 
 class VerifiedDirectoryPreparation(SourcePreparation[VerifiedDirectorySource]):
@@ -131,8 +159,11 @@ class DirectorySnapshotPreparation(SourcePreparation[DirectorySnapshotSource]):
             source.tree_digest,
             changed_message="Captured directory-snapshot source has changed since planning",
         )
-        with _create_worker_workspace(_configured_workspace_root()) as temporary_root:
-            workspace = Path(temporary_root) / "source"
+        container = _reserve_worker_workspace(
+            _configured_workspace_root(), source.original_path.name, source.tree_digest[:8], non_git=True
+        )
+        try:
+            workspace = container / DIRECTORY_SNAPSHOT_DIRECTORY
             try:
                 shutil.copytree(snapshot_dir, workspace)
             except OSError as error:
@@ -146,6 +177,8 @@ class DirectorySnapshotPreparation(SourcePreparation[DirectorySnapshotSource]):
                 scan_mode="complete",
             )
             yield workspace
+        finally:
+            shutil.rmtree(container)
 
 
 _PREPARATIONS: tuple[tuple[type, SourcePreparation], ...] = (
