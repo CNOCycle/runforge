@@ -1,10 +1,12 @@
 # Workers And Recovery
 
-Once a matrix has produced many plans, you want to consume them — ideally from
-more than one process — and you need a way back when a run is interrupted.
+`discover` recursively reports the status of every plan under a report root.
+Once there are enough that you want to consume them from more than one
+process, or one was interrupted — including killed by the system, not just
+failing normally — you need a way to find it.
 
-This guide covers inspecting planned work, executing it safely in parallel, and
-the one supported recovery path.
+This guide covers inspecting planned work and its status, executing it safely
+in parallel, and the one supported recovery path.
 
 ## Inspecting Without Executing
 
@@ -98,6 +100,34 @@ experiment is dead, because it cannot distinguish that from one that is merely
 slow.
 
 Recovery is therefore explicit and operator-confirmed.
+
+## Finding A Possibly-Stale Run
+
+The previous section describes what RunForge won't do automatically; this is
+how you find a candidate for the manual recovery below, instead of already
+having to know one exists. Add `--older-than` or `--updated-before` to
+`discover` to flag `inprogress` experiments that started a while ago:
+
+```bash
+runforge discover "$REPORT_ROOT" --older-than 6h
+runforge discover "$REPORT_ROOT" --updated-before 2026-08-01T00:00:00Z
+```
+
+Both are opt-in and purely a hint — nothing is retried, no claim is touched,
+and passing neither leaves `discover`'s output exactly as it always was. A
+flagged experiment gets one extra line naming how long it's been running and,
+when the claim was acquired on this same host, whether that process is still
+alive:
+
+```text
+inprogress | attempt=1 | name=baseline | source=main@a1b2c3d4 | path=/reports/main/01234567_baseline_0000
+  stale: inprogress for 8h12m, started 2026-08-12T02:00:00.000000Z — process appears dead: PID 4127 not running on node7
+```
+
+"Process appears dead" only means the PID isn't currently running on *this*
+host — not proof the original worker is gone, since a reused PID or a claim
+made from a different host both read as "cannot verify liveness" instead.
+Confirm independently before using `retry --force`, exactly as below.
 
 ## Recovering An Interrupted Run
 

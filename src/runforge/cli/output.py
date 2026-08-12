@@ -13,8 +13,10 @@ from pathlib import Path
 
 from runforge.execution.discovery import DiscoveryResult
 from runforge.execution.sources import load_worker_manifest
+from runforge.execution.staleness import describe_staleness
 from runforge.execution.worker import WorkerProgressEvent, WorkerResult
 from runforge.execution.workspace_cleanup import DiscoveredWorkspace
+from runforge.infrastructure.duration import format_duration
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.planning.matrix_mapping import MatrixMapping, load_matrix_mapping
@@ -50,9 +52,17 @@ def print_matrix_mapping(mapping: MatrixMapping) -> None:
         print(" | ".join(value.ljust(widths[column]) for column, value in enumerate(row)))
 
 
-def print_discovery(result: DiscoveryResult) -> None:
-    """Print discovered experiments, diagnostics, and lifecycle totals."""
+def print_discovery(result: DiscoveryResult, *, stale_cutoff: datetime | None = None) -> None:
+    """Print discovered experiments, diagnostics, and lifecycle totals.
+
+    ``stale_cutoff`` is opt-in: when ``None`` (the default), output is
+    byte-for-byte identical to a plain scan -- no claim file is even read.
+    When given, an ``inprogress`` experiment whose ``started_at`` predates it
+    gets one additional indented hint line, and the summary gains a trailing
+    stale count.
+    """
     print(f"Experiments discovered under: {result.root}")
+    stale_count = 0
     if result.experiments:
         for experiment in result.experiments:
             print(
@@ -60,6 +70,15 @@ def print_discovery(result: DiscoveryResult) -> None:
                 f"| name={experiment.configuration.name} | source={_source_identity_text(experiment.configuration)} "
                 f"| path={experiment.path}"
             )
+            if stale_cutoff is None:
+                continue
+            hint = describe_staleness(experiment, stale_cutoff)
+            if hint is not None:
+                stale_count += 1
+                print(
+                    f"  stale: inprogress for {format_duration(hint.elapsed_seconds)}, "
+                    f"started {hint.started_at} — {hint.verdict}"
+                )
     else:
         print("No experiments found.")
 
@@ -71,6 +90,8 @@ def print_discovery(result: DiscoveryResult) -> None:
     for state in _DISCOVERY_STATES:
         print(f"  {state}: {counts[state]}")
     print(f"  invalid: {len(result.diagnostics)}")
+    if stale_cutoff is not None:
+        print(f"  stale: {stale_count}")
 
 
 def _source_identity_text(configuration: ExperimentConfiguration) -> str:
@@ -207,9 +228,13 @@ def print_removed_workspace(path: Path) -> None:
     print(f"Removed: {path}", flush=True)
 
 
-def print_discover_arguments(arguments: argparse.Namespace) -> None:
-    """Print the effective root for read-only discovery."""
-    _print_effective_arguments("discover", [("root", path_text(arguments.root))])
+def print_discover_arguments(arguments: argparse.Namespace, *, stale_cutoff: datetime | None = None) -> None:
+    """Print the effective root and staleness cutoff for read-only discovery."""
+    cutoff_text = "not set" if stale_cutoff is None else stale_cutoff.isoformat().replace("+00:00", "Z")
+    _print_effective_arguments(
+        "discover",
+        [("root", path_text(arguments.root)), ("stale cutoff", cutoff_text)],
+    )
 
 
 def print_worker_arguments(arguments: argparse.Namespace) -> None:
