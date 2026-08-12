@@ -62,6 +62,7 @@ def _configured_workspace_root() -> Path | None:
     return Path(configured).expanduser().resolve() if configured else None
 
 
+WORKSPACE_NAME_PREFIX = "runforge-worker-"
 _WORKSPACE_NAME_ATTEMPTS = 5
 
 
@@ -76,7 +77,8 @@ def _worker_workspace_name(source_slug: str, source_digest8: str, *, non_git: bo
     """
     marker = "-nongit" if non_git else ""
     nonce = uuid.uuid4().hex[:4]
-    return f"runforge-worker-{source_slug}{marker}-{source_digest8}-{utc_compact_timestamp()}-p{os.getpid()}-{nonce}"
+    stamp = utc_compact_timestamp()
+    return f"{WORKSPACE_NAME_PREFIX}{source_slug}{marker}-{source_digest8}-{stamp}-p{os.getpid()}-{nonce}"
 
 
 def _reserve_worker_workspace(root: Path | None, source_slug: str, source_digest8: str, *, non_git: bool) -> Path:

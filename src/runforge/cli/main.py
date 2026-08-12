@@ -11,14 +11,17 @@ from pathlib import Path
 from runforge.cli.output import (
     path_text,
     print_discover_arguments,
+    print_discovered_workspaces,
     print_discovery,
     print_matrix_mapping,
     print_matrix_mapping_file,
     print_matrix_show_arguments,
     print_planning_arguments,
+    print_removed_workspace,
     print_retry_arguments,
     print_run_arguments,
     print_worker_arguments,
+    print_worker_cleanup_arguments,
     print_worker_inspect_arguments,
     print_worker_manifest_file,
     print_worker_progress,
@@ -29,6 +32,12 @@ from runforge.cli.requests import matrix_request, planning_request
 from runforge.execution.discovery import DiscoveryError, discover_experiments
 from runforge.execution.retry import RetryError, prepare_retry
 from runforge.execution.worker import WorkerError, run_experiment, run_worker
+from runforge.execution.workspace_cleanup import (
+    WorkspaceCleanupError,
+    default_workspace_root,
+    discover_workspaces,
+    remove_workspace,
+)
 from runforge.planning.matrix_mapping import build_matrix_mapping, save_matrix_mapping
 from runforge.planning.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
 
@@ -38,7 +47,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     try:
         return _dispatch(arguments)
-    except (DiscoveryError, PlanningError, RetryError, WorkerError, ValueError) as error:
+    except (DiscoveryError, PlanningError, RetryError, WorkerError, WorkspaceCleanupError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
@@ -91,6 +100,26 @@ def _run_matrix_show_command(arguments: argparse.Namespace) -> int:
 def _run_worker_inspect_command(arguments: argparse.Namespace) -> int:
     print_worker_inspect_arguments(arguments)
     print_worker_manifest_file(arguments.workspace)
+    return 0
+
+
+def _run_worker_cleanup_command(arguments: argparse.Namespace) -> int:
+    root = arguments.root if arguments.root is not None else default_workspace_root()
+    print_worker_cleanup_arguments(arguments, root)
+    discovered = discover_workspaces(root)
+    print_discovered_workspaces(discovered)
+    if arguments.confirm is None:
+        return 0
+    discovered_paths = {workspace.path for workspace in discovered}
+    requested = tuple(Path(path).expanduser().resolve() for path in arguments.confirm)
+    unknown = tuple(path for path in requested if path not in discovered_paths)
+    if unknown:
+        raise WorkerError(
+            "--confirm named a path that discovery did not find: " + ", ".join(str(path) for path in unknown)
+        )
+    for path in requested:
+        remove_workspace(path)
+        print_removed_workspace(path)
     return 0
 
 
@@ -170,6 +199,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "matrix": _run_matrix_command,
     "matrix-show": _run_matrix_show_command,
     "worker-inspect": _run_worker_inspect_command,
+    "worker-cleanup": _run_worker_cleanup_command,
     "run": _run_run_command,
     "retry": _run_retry_command,
     "discover": _run_discover_command,

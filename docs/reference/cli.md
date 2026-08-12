@@ -17,6 +17,7 @@ interact, and what each exit code means.
 | `discover` | Lists a report root. Read-only. | `0`, or `2` if any metadata is invalid |
 | `worker` | Executes available plans from one report root. | See below |
 | `worker-inspect` | Renders a worker workspace's manifest. Read-only. | `0`, or `2` on a bad workspace |
+| `worker-cleanup` | Lists leftover worker workspaces; removes only those passed to `--confirm`. | `0`, or `2` on error |
 
 `worker` exit codes carry more meaning than the rest:
 
