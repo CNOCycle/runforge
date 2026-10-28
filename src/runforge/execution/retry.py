@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import stat
 import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -30,6 +31,7 @@ from runforge.schemas.experiment import ExperimentStatus
 
 _STATUS_SNAPSHOT_FILE = "status.snapshot.json"
 _ARCHIVED_OUTPUTS = (STDOUT_LOG_FILE, STDERR_LOG_FILE, ARTIFACTS_DIRECTORY)
+_ARTIFACT_SEED = ".artifacts-seed"
 
 
 class RetryError(RuntimeError):
@@ -64,17 +66,24 @@ class _ArchiveTransaction:
     moved_outputs: list[str] = field(default_factory=list)
     published: bool = False
     created_artifacts: bool = False
+    seeded_artifacts: bool = False
 
 
 def prepare_retry(
-    experiment_path: Path, *, force: bool = False, claim: ExperimentClaim | None = None
+    experiment_path: Path,
+    *,
+    force: bool = False,
+    claim: ExperimentClaim | None = None,
+    reuse_artifacts: bool = False,
 ) -> RetryPreparation:
-    """Archive one prior attempt and atomically make the experiment runnable."""
+    """Archive one prior attempt, optionally copying its artifacts into the retry."""
     layout = ExperimentDirectory.resolve(experiment_path)
     if not layout.root.is_dir():
         raise RetryError(f"Experiment directory does not exist: {layout.root}")
     if not isinstance(force, bool):
         raise RetryError("force must be a boolean")
+    if not isinstance(reuse_artifacts, bool):
+        raise RetryError("reuse_artifacts must be a boolean")
 
     try:
         _configuration, previous_status = layout.load_metadata()
@@ -101,7 +110,7 @@ def prepare_retry(
         error=None,
     )
     try:
-        _archive_and_reset(layout, archive, previous_status, prepared_status)
+        _archive_and_reset(layout, archive, previous_status, prepared_status, reuse_artifacts=reuse_artifacts)
     except RetryError:
         raise
     except OSError as error:
@@ -149,7 +158,51 @@ def _archive_and_reset(
     archive: Path,
     previous_status: ExperimentStatus,
     prepared_status: ExperimentStatus,
+    *,
+    reuse_artifacts: bool = False,
 ) -> None:
+    _validate_retry_archive(archive)
+    if reuse_artifacts:
+        _validate_artifact_tree(experiment.artifacts)
+    history = archive.parent
+    staging = Path(tempfile.mkdtemp(prefix=f".{archive.name}.tmp-", dir=history))
+    transaction = _ArchiveTransaction(experiment=experiment.root, staging=staging, archive=archive)
+    try:
+        save_json_object(staging / _STATUS_SNAPSHOT_FILE, previous_status.to_dict())
+        if reuse_artifacts:
+            # Keep old outputs in place until an independent, complete seed exists.
+            # Never follow links if the tree changes after preflight.
+            shutil.copytree(experiment.artifacts, staging / _ARTIFACT_SEED, symlinks=True)
+            _validate_artifact_tree(staging / _ARTIFACT_SEED)
+        for name in _ARCHIVED_OUTPUTS:
+            if _move_output(experiment.root, staging, name):
+                transaction.moved_outputs.append(name)
+        staging.replace(archive)
+        transaction.published = True
+        if reuse_artifacts:
+            (archive / _ARTIFACT_SEED).replace(experiment.artifacts)
+            transaction.seeded_artifacts = True
+        else:
+            experiment.artifacts.mkdir()
+        transaction.created_artifacts = True
+        experiment.save_status(prepared_status)
+    except BaseException as error:
+        try:
+            _rollback_archive(transaction)
+        except OSError as rollback_error:
+            raise RetryError(
+                f"Could not prepare retry for {experiment.root}; rollback also failed: {rollback_error}; "
+                f"preserve and inspect {staging} and {archive} before retrying"
+            ) from rollback_error
+        if isinstance(error, RetryError):
+            raise
+        if isinstance(error, Exception):
+            raise RetryError(f"Could not prepare retry for {experiment.root}: {error}") from error
+        raise
+
+
+def _validate_retry_archive(archive: Path) -> None:
+    """Do not overwrite history or hide interrupted preparation for this attempt."""
     history = archive.parent
     # A dangling symlink reports exists() as false while still occupying the
     # path, so absence and a usable directory must both be checked.
@@ -158,31 +211,23 @@ def _archive_and_reset(
     history.mkdir(parents=True, exist_ok=True)
     if not is_absent(archive):
         raise RetryError(f"Retry archive already exists: {archive}")
+    leftover = next(history.glob(f".{archive.name}.tmp-*"), None)
+    if leftover is not None:
+        raise RetryError(
+            f"Interrupted retry preparation at {leftover}; inspect and recover its outputs before retrying"
+        )
 
-    staging = Path(tempfile.mkdtemp(prefix=f".{archive.name}.tmp-", dir=history))
-    transaction = _ArchiveTransaction(experiment=experiment.root, staging=staging, archive=archive)
-    try:
-        save_json_object(staging / _STATUS_SNAPSHOT_FILE, previous_status.to_dict())
-        for name in _ARCHIVED_OUTPUTS:
-            if _move_output(experiment.root, staging, name):
-                transaction.moved_outputs.append(name)
-        staging.replace(archive)
-        transaction.published = True
-        experiment.artifacts.mkdir()
-        transaction.created_artifacts = True
-        experiment.save_status(prepared_status)
-    except BaseException as error:
-        try:
-            _rollback_archive(transaction)
-        except OSError as rollback_error:
-            raise RetryError(
-                f"Could not prepare retry for {experiment.root}; rollback also failed: {rollback_error}"
-            ) from rollback_error
-        if isinstance(error, RetryError):
-            raise
-        if isinstance(error, Exception):
-            raise RetryError(f"Could not prepare retry for {experiment.root}: {error}") from error
-        raise
+
+def _validate_artifact_tree(root: Path) -> None:
+    """Reject missing trees, links and special files before publishing a seed."""
+    if not is_safe_directory(root):
+        raise RetryError(f"Artifact reuse requires a real directory: {root}")
+    for path in root.iterdir():
+        mode = path.lstat().st_mode
+        if stat.S_ISDIR(mode):
+            _validate_artifact_tree(path)
+        elif not stat.S_ISREG(mode):
+            raise RetryError(f"Artifact reuse supports only regular files and directories: {path}")
 
 
 def _move_output(experiment: Path, staging: Path, name: str) -> bool:
@@ -203,7 +248,11 @@ def _move_output(experiment: Path, staging: Path, name: str) -> bool:
 def _rollback_archive(transaction: _ArchiveTransaction) -> None:
     location = transaction.archive if transaction.published else transaction.staging
     if transaction.created_artifacts:
-        ExperimentDirectory(transaction.experiment).artifacts.rmdir()
+        artifacts = ExperimentDirectory(transaction.experiment).artifacts
+        if transaction.seeded_artifacts:
+            shutil.rmtree(artifacts)
+        else:
+            artifacts.rmdir()
     for name in reversed(transaction.moved_outputs):
         destination = transaction.experiment / name
         if not is_absent(destination):

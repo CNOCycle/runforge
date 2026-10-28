@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -22,6 +25,7 @@ from tests.support import create_git_repository
 FAILURE_EXIT_CODE = 7
 SECOND_ATTEMPT = 2
 ACTIVE_ATTEMPT = 3
+INTERRUPTED_EXIT_CODE = 9
 
 
 def _experiment(tmp_path: Path, script: str = "print('done')\n") -> Path:
@@ -232,7 +236,8 @@ def test_prepare_retry_rejects_existing_attempt_archive_without_changes(tmp_path
     assert (archive / "marker.txt").read_text(encoding="utf-8") == "existing"
 
 
-def test_prepare_retry_rolls_back_outputs_when_status_reset_fails(tmp_path, monkeypatch):
+@pytest.mark.parametrize("reuse_artifacts", [False, True])
+def test_prepare_retry_rolls_back_outputs_when_status_reset_fails(tmp_path, monkeypatch, reuse_artifacts):
     experiment = _experiment(tmp_path)
     failed = _failed_status(experiment)
     (experiment / "stdout.log").write_text("out\n", encoding="utf-8")
@@ -248,13 +253,200 @@ def test_prepare_retry_rolls_back_outputs_when_status_reset_fails(tmp_path, monk
     monkeypatch.setattr(experiment_storage, "save_json_object", fail_status_reset)
 
     with pytest.raises(RetryError, match="disk full"):
-        prepare_retry(experiment)
+        prepare_retry(experiment, reuse_artifacts=reuse_artifacts)
 
     assert _status(experiment) == failed
     assert (experiment / "stdout.log").read_text(encoding="utf-8") == "out\n"
     assert (experiment / "stderr.log").read_text(encoding="utf-8") == "err\n"
     assert (experiment / "artifacts" / "partial.txt").read_text(encoding="utf-8") == "partial"
     assert not tuple(experiment.glob("attempt-*"))
+    assert not tuple(experiment.glob(".attempt-*.tmp-*"))
+
+
+def test_prepare_retry_reuses_an_independent_tree_and_preserves_logs_and_status(tmp_path):
+    experiment = _experiment(tmp_path)
+    failed = _failed_status(experiment)
+    artifacts = experiment / "artifacts"
+    (artifacts / "nested" / "empty").mkdir(parents=True)
+    checkpoint = artifacts / "nested" / "checkpoint.bin"
+    checkpoint.write_bytes(b"saved\x00progress")
+    (experiment / "stdout.log").write_text("old stdout\n")
+    (experiment / "stderr.log").write_text("old stderr\n")
+    immutable = {name: (experiment / name).read_bytes() for name in ("config.json", "cmd.sh")}
+
+    preparation = prepare_retry(experiment, reuse_artifacts=True)
+
+    archive = preparation.archive
+    assert _status(experiment).state == "init"
+    assert _status(experiment).attempt == 1
+    assert ExperimentStatus.from_dict(load_json_object(archive / "status.snapshot.json")) == failed
+    assert checkpoint.read_bytes() == b"saved\x00progress"
+    assert (artifacts / "nested" / "empty").is_dir()
+    checkpoint.write_bytes(b"new progress")
+    assert (archive / "artifacts" / "nested" / "checkpoint.bin").read_bytes() == b"saved\x00progress"
+    assert (archive / "stdout.log").read_text() == "old stdout\n"
+    assert (archive / "stderr.log").read_text() == "old stderr\n"
+    assert not (experiment / "stdout.log").exists()
+    assert not (experiment / "stderr.log").exists()
+    assert {name: (experiment / name).read_bytes() for name in immutable} == immutable
+    assert {path.name for path in archive.iterdir()} == {
+        "artifacts",
+        "status.snapshot.json",
+        "stdout.log",
+        "stderr.log",
+    }
+    assert not tuple(experiment.glob(".attempt-*.tmp-*"))
+
+
+def test_prepare_retry_can_reuse_an_empty_artifacts_directory(tmp_path):
+    experiment = _experiment(tmp_path)
+    _failed_status(experiment)
+
+    preparation = prepare_retry(experiment, reuse_artifacts=True)
+
+    assert list((experiment / "artifacts").iterdir()) == []
+    assert list((preparation.archive / "artifacts").iterdir()) == []
+
+
+@pytest.mark.parametrize("kind", ["missing", "file", "symlink", "nested-symlink", "fifo"])
+def test_reuse_rejects_unsupported_artifact_trees_before_moving_outputs(tmp_path, kind):
+    experiment = _experiment(tmp_path)
+    failed = _failed_status(experiment)
+    artifacts = experiment / "artifacts"
+    (experiment / "stdout.log").write_text("keep output\n")
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "checkpoint").write_text("keep external\n")
+    if kind in {"missing", "file", "symlink"}:
+        artifacts.rmdir()
+    if kind == "file":
+        artifacts.write_text("not a directory")
+    elif kind == "symlink":
+        artifacts.symlink_to(external, target_is_directory=True)
+    elif kind == "nested-symlink":
+        (artifacts / "checkpoint").symlink_to(external / "checkpoint")
+    elif kind == "fifo":
+        os.mkfifo(artifacts / "checkpoint")
+
+    with pytest.raises(RetryError, match="Artifact reuse"):
+        prepare_retry(experiment, reuse_artifacts=True)
+
+    assert _status(experiment) == failed
+    assert (experiment / "stdout.log").read_text() == "keep output\n"
+    assert (external / "checkpoint").read_text() == "keep external\n"
+    assert not tuple(experiment.glob("attempt-*"))
+    assert not tuple(experiment.glob(".attempt-*.tmp-*"))
+
+
+def test_reuse_copy_failure_removes_partial_seed_and_preserves_originals(tmp_path, monkeypatch):
+    experiment = _experiment(tmp_path)
+    failed = _failed_status(experiment)
+    (experiment / "artifacts" / "checkpoint").write_text("original progress")
+    (experiment / "stdout.log").write_text("old output")
+
+    def fail_copy(_source, destination, **_options):
+        destination.mkdir()
+        (destination / "checkpoint").write_text("partial copy")
+        raise OSError("copy ran out of space")
+
+    monkeypatch.setattr(retry_module.shutil, "copytree", fail_copy)
+    with pytest.raises(RetryError, match="copy ran out of space"):
+        prepare_retry(experiment, reuse_artifacts=True)
+
+    assert _status(experiment) == failed
+    assert (experiment / "artifacts" / "checkpoint").read_text() == "original progress"
+    assert (experiment / "stdout.log").read_text() == "old output"
+    assert not tuple(experiment.glob("attempt-*"))
+    assert not tuple(experiment.glob(".attempt-*.tmp-*"))
+
+
+def test_reuse_revalidates_the_copied_tree_before_publishing(tmp_path, monkeypatch):
+    experiment = _experiment(tmp_path)
+    failed = _failed_status(experiment)
+    original_copy = retry_module.shutil.copytree
+    external = tmp_path / "external"
+    external.write_text("keep")
+
+    def copy_with_link(source, destination, **options):
+        original_copy(source, destination, **options)
+        (destination / "unexpected-link").symlink_to(external)
+
+    monkeypatch.setattr(retry_module.shutil, "copytree", copy_with_link)
+    with pytest.raises(RetryError, match="only regular files and directories"):
+        prepare_retry(experiment, reuse_artifacts=True)
+
+    assert _status(experiment) == failed
+    assert list((experiment / "artifacts").iterdir()) == []
+    assert external.read_text() == "keep"
+    assert not tuple(experiment.glob("attempt-*"))
+    assert not tuple(experiment.glob(".attempt-*.tmp-*"))
+
+
+def test_reuse_rollback_failure_diagnoses_and_preserves_the_archive(tmp_path, monkeypatch):
+    experiment = _experiment(tmp_path)
+    failed = _failed_status(experiment)
+    artifacts = experiment / "artifacts"
+    (artifacts / "checkpoint").write_text("saved progress")
+    original_remove = retry_module.shutil.rmtree
+
+    def fail_status_reset(_layout, _status):
+        raise OSError("status write failed")
+
+    def fail_seed_removal(path, *args, **kwargs):
+        if path == artifacts:
+            raise OSError("cannot remove copied artifacts")
+        return original_remove(path, *args, **kwargs)
+
+    monkeypatch.setattr(experiment_storage.ExperimentDirectory, "save_status", fail_status_reset)
+    monkeypatch.setattr(retry_module.shutil, "rmtree", fail_seed_removal)
+    with pytest.raises(RetryError, match="rollback also failed.*preserve and inspect") as raised:
+        prepare_retry(experiment, reuse_artifacts=True)
+
+    archive = experiment / "attempt-0001"
+    assert str(archive) in str(raised.value)
+    assert _status(experiment) == failed
+    assert (archive / "artifacts" / "checkpoint").read_text() == "saved progress"
+    assert (artifacts / "checkpoint").read_text() == "saved progress"
+
+
+@pytest.mark.parametrize("boundary", ["copy", "status-reset"])
+def test_abrupt_retry_preparation_preserves_checkpoints_and_blocks_reentry(tmp_path, boundary):
+    experiment = _experiment(tmp_path)
+    failed = _failed_status(experiment)
+    (experiment / "artifacts" / "checkpoint").write_text("original progress")
+    script = """
+import os
+import sys
+from pathlib import Path
+import runforge.execution.retry as retry
+def stop_copy(source, destination, **options):
+    destination.mkdir()
+    (destination / 'checkpoint').write_text('partial copy')
+    os._exit(9)
+def stop_reset(self, status):
+    os._exit(9)
+if sys.argv[2] == 'copy':
+    retry.shutil.copytree = stop_copy
+else:
+    retry.ExperimentDirectory.save_status = stop_reset
+retry.prepare_retry(Path(sys.argv[1]), reuse_artifacts=True)
+"""
+
+    result = subprocess.run([sys.executable, "-c", script, str(experiment), boundary], check=False)
+
+    assert result.returncode == INTERRUPTED_EXIT_CODE
+    assert _status(experiment) == failed
+    if boundary == "copy":
+        assert (experiment / "artifacts" / "checkpoint").read_text() == "original progress"
+        assert tuple(experiment.glob(".attempt-*.tmp-*"))
+        diagnosis = "Interrupted retry preparation"
+    else:
+        assert (experiment / "attempt-0001" / "artifacts" / "checkpoint").read_text() == "original progress"
+        assert (experiment / "artifacts" / "checkpoint").read_text() == "original progress"
+        diagnosis = "Retry archive already exists"
+    with pytest.raises(RetryError, match=diagnosis):
+        prepare_retry(experiment, reuse_artifacts=True)
+    assert _status(experiment) == failed
 
 
 def test_archive_rejects_a_dangling_history_symlink(tmp_path):
