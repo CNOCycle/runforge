@@ -117,12 +117,12 @@ def test_remove_workspace_deregisters_a_git_worktree(tmp_path):
 
 
 def test_default_workspace_root_uses_the_configured_variable(tmp_path, monkeypatch):
-    monkeypatch.setenv(sources_module.WORKER_ROOT_VARIABLE, str(tmp_path))
+    monkeypatch.setenv(sources_module.WORKSPACE_ROOT_VARIABLE, str(tmp_path))
 
     assert default_workspace_root() == tmp_path.resolve()
 
 
 def test_default_workspace_root_falls_back_to_the_current_directory(monkeypatch):
-    monkeypatch.delenv(sources_module.WORKER_ROOT_VARIABLE, raising=False)
+    monkeypatch.delenv(sources_module.WORKSPACE_ROOT_VARIABLE, raising=False)
 
     assert default_workspace_root() == Path(".")

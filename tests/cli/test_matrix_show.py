@@ -38,10 +38,10 @@ def _artifact(tmp_path: Path) -> Path:
 def test_matrix_show_renders_a_persisted_mapping(tmp_path, capsys):
     artifact = _artifact(tmp_path)
 
-    assert main(["matrix-show", str(artifact)]) == 0
+    assert main(["mapping", str(artifact)]) == 0
 
     output = capsys.readouterr().out
-    assert "RunForge matrix-show effective arguments:" in output
+    assert "RunForge mapping effective arguments:" in output
     assert f"  artifact: {artifact}" in output
     assert "Matrix identity: " in output
     assert "index | dir_name" in output
@@ -53,7 +53,7 @@ def test_matrix_show_leaves_every_experiment_untouched(tmp_path):
     artifact = _artifact(tmp_path)
     before = {path: path.read_bytes() for path in sorted(artifact.parent.rglob("*.json"))}
 
-    assert main(["matrix-show", str(artifact)]) == 0
+    assert main(["mapping", str(artifact)]) == 0
 
     assert {path: path.read_bytes() for path in sorted(artifact.parent.rglob("*.json"))} == before
 
@@ -71,7 +71,7 @@ def test_matrix_show_reports_an_empty_row_set_without_a_traceback(tmp_path, caps
         },
     )
 
-    assert main(["matrix-show", str(artifact)]) == 0
+    assert main(["mapping", str(artifact)]) == 0
 
     assert "no matrix rows recorded" in capsys.readouterr().out
 
@@ -126,6 +126,6 @@ def test_matrix_show_rejects_unreadable_artifacts_cleanly(tmp_path, capsys, cont
     if content is not None:
         artifact.write_text(content, encoding="utf-8")
 
-    assert main(["matrix-show", str(artifact)]) == CLI_ERROR_EXIT
+    assert main(["mapping", str(artifact)]) == CLI_ERROR_EXIT
 
     assert match in capsys.readouterr().err

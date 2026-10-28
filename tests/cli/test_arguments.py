@@ -140,14 +140,11 @@ def test_run_summary_uses_recorded_configuration_without_environment_values(tmp_
 
     output = capsys.readouterr().out
     assert "RunForge run effective arguments:" in output
-    assert f"  experiment: {experiment}" in output
+    assert f"  paths: {experiment}" in output
     assert "  stream output: disabled" in output
-    assert "  recorded command: python train.py" in output
-    assert "  environment keys: API_TOKEN" in output
-    assert f"  artifact directory: {experiment / 'artifacts'}" in output
     assert f"  stdout log: {experiment / 'stdout.log'}" in output
     assert f"  stderr log: {experiment / 'stderr.log'}" in output
-    assert f"Preparing experiment: {experiment}" in output
-    assert "Executing command: python train.py" in output
-    assert f"Experiment completed with exit code 0: {experiment}" in output
+    assert f"Preparing experiment [1/1]: {experiment}" in output
+    assert "Executing command [1/1]: python train.py" in output
+    assert f"Experiment completed with exit code 0 [1/1]: {experiment}" in output
     assert "very-secret" not in output

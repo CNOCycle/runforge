@@ -7,7 +7,15 @@ import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from runforge.infrastructure.claims import ClaimError, clear_claim, describe_claim_holder
+from runforge.execution.errors import ExperimentNotRunnableError
+from runforge.infrastructure.claims import (
+    ClaimError,
+    ExperimentClaim,
+    clear_claim,
+    describe_claim_holder,
+    try_acquire_claim,
+    verify_claim_owner,
+)
 from runforge.infrastructure.clock import utc_now
 from runforge.infrastructure.json_store import save_json_object
 from runforge.infrastructure.paths import is_absent, is_safe_directory
@@ -26,6 +34,15 @@ _ARCHIVED_OUTPUTS = (STDOUT_LOG_FILE, STDERR_LOG_FILE, ARTIFACTS_DIRECTORY)
 
 class RetryError(RuntimeError):
     """Raised when an experiment cannot be prepared for retry safely."""
+
+
+class RetryNotRunnableError(RetryError, ExperimentNotRunnableError):
+    """An ineligible retry state, usable as a stale selection or retry error."""
+
+
+def is_retryable_state(state: str, *, force: bool = False) -> bool:
+    """The shared selection/preparation policy for retryable lifecycle states."""
+    return state == "failed" or (force and state == "inprogress")
 
 
 @dataclass(frozen=True)
@@ -49,7 +66,9 @@ class _ArchiveTransaction:
     created_artifacts: bool = False
 
 
-def prepare_retry(experiment_path: Path, *, force: bool = False) -> RetryPreparation:
+def prepare_retry(
+    experiment_path: Path, *, force: bool = False, claim: ExperimentClaim | None = None
+) -> RetryPreparation:
     """Archive one prior attempt and atomically make the experiment runnable."""
     layout = ExperimentDirectory.resolve(experiment_path)
     if not layout.root.is_dir():
@@ -65,7 +84,11 @@ def prepare_retry(experiment_path: Path, *, force: bool = False) -> RetryPrepara
     # Forcing is reported only when it actually overrode a sign of possible
     # liveness: an inprogress state, or a claim this retry had to clear.
     state_forced = _validate_retry_state(previous_status, force=force)
-    claim_cleared = _prepare_retry_claim(layout, force=force)
+    if claim is None:
+        claim_cleared = _prepare_retry_claim(layout, force=force)
+    else:
+        verify_claim_owner(layout, claim)
+        claim_cleared = False
     forced = state_forced or claim_cleared
     archive = layout.root / f"attempt-{previous_status.attempt:04d}"
     prepared_status = replace(
@@ -94,17 +117,15 @@ def prepare_retry(experiment_path: Path, *, force: bool = False) -> RetryPrepara
 
 def _validate_retry_state(status: ExperimentStatus, *, force: bool) -> bool:
     """Return whether the recorded state itself required operator confirmation."""
-    if status.state == "failed":
-        return False
+    if is_retryable_state(status.state, force=force):
+        return status.state == "inprogress"
     if status.state == "inprogress":
-        if force:
-            return True
-        raise RetryError(
+        raise RetryNotRunnableError(
             "Experiment is inprogress; force=True is required after confirming that the original process has stopped"
         )
     if status.state == "completed":
-        raise RetryError("Completed experiments cannot be retried; create a new plan instead")
-    raise RetryError(f"Experiment in state {status.state!r} should be executed with run, not retry")
+        raise RetryNotRunnableError("Completed experiments cannot be retried; create a new plan instead")
+    raise RetryNotRunnableError(f"Experiment in state {status.state!r} should be executed with run, not retry")
 
 
 def _prepare_retry_claim(experiment: ExperimentDirectory, *, force: bool) -> bool:
@@ -192,3 +213,14 @@ def _rollback_archive(transaction: _ArchiveTransaction) -> None:
         shutil.rmtree(location)
     if transaction.staging != location and transaction.staging.exists():
         shutil.rmtree(transaction.staging)
+
+
+def acquire_retry_claim(experiment: ExperimentDirectory, *, force: bool = False) -> tuple[ExperimentClaim | None, bool]:
+    """Validate before an explicit force override, then acquire preparation ownership."""
+    _configuration, status = experiment.load_metadata()
+    _validate_retry_state(status, force=force)
+    overridden = False
+    if force and experiment.claim.exists():
+        clear_claim(experiment)
+        overridden = True
+    return try_acquire_claim(experiment), overridden

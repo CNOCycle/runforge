@@ -1,186 +1,271 @@
-# Workers And Recovery
+# Workers, holds, and recovery
 
-`discover` recursively reports the status of every plan under a report root.
-Once there are enough that you want to consume them from more than one
-process, or one was interrupted — including killed by the system, not just
-failing normally — you need a way to find it.
+## Before starting again after a restart
 
-This guide covers inspecting planned work and its status, executing it safely
-in parallel, and the one supported recovery path.
+After a Docker restart, host reboot, or killed job, inspect the previous work
+before starting another runner. The report root holds durable experiments;
+the workspace root holds temporary source checkouts. Keep reports and any
+checkpoints on persistent storage if they must survive container replacement.
 
-## Inspecting Without Executing
+run, retry, and launch automatically check existing inprogress or claimed
+experiments found in their initial selection, before starting any new attempt.
+Each claim is assessed from local evidence:
 
-`discover` scans a report root recursively and reports what it finds:
+| Assessment | Meaning | Startup output |
+| --- | --- | --- |
+| active | The claim's HOSTNAME:PID runs on this host and started before the claim. | Nothing: a concurrent worker is normal. |
+| stale | The process exited (including an unreaped zombie), its PID is gone, or the PID was reused by a process started after the claim. | Owner, matching workspace, and the forced-retry command to run after confirmation. |
+| unknown | Another host, a custom RUNFORGE_CLAIM_OWNER, a missing or unreadable claim, or a running PID whose start time cannot be read. | Owner and workspace details. A running PID gets a ps check instead of a retry command. |
+
+Process start times come from Linux /proc; elsewhere a running PID is unknown.
+The report does not clear claims, change status, retry work, or block unrelated
+runnable experiments. Stale means the recorded worker process is gone; a child
+it started may still run, so confirm both before recovery. These are
+observations, not a guarantee about activity when execution acquires its claim.
+
+Startup reuses the initial report scan. For affected records, it searches each
+current workspace parent once: RUNFORGE_WORKSPACE_ROOT when configured, otherwise
+the Git repository's parent or the system temporary directory for snapshots.
+It does not search every disk or a previous container's workspace location.
+Use the explicit checks below for old locations, all workspaces, and experiments
+outside the selected paths. Verified-directory execution creates no workspace.
 
 ```bash
 runforge discover "$REPORT_ROOT"
-```
-
-It prints one experiment per line with state, attempt, name, source identity,
-and path, then counts per lifecycle state. It is strictly read-only: it never
-executes commands, changes status, creates claims, or waits for another process.
-
-It exits `0` after a clean scan and `2` when the root cannot be scanned or any
-candidate's metadata is invalid. An empty scan is a success with zero totals.
-
-Discovery only reports fully published plans, so it is safe to run while another
-process is planning into the same root.
-
-## Executing Available Work
-
-`worker` consumes one finite snapshot of runnable plans:
-
-```bash
-runforge worker "$REPORT_ROOT"
-```
-
-It scans `created` and `init` plans in deterministic path order, atomically
-claims each one immediately before executing it, and delegates to the same
-executor `run` uses. If another worker already owns a plan, it skips that plan
-and continues scanning rather than consuming a task quota slot.
-
-Run several against one report root to parallelize. Only the atomic claim
-decides ownership; ordering and start-time differences are not correctness
-mechanisms.
-
-The worker does not poll, rescan, wait, or run as a daemon. Work published after
-its snapshot is handled by a later invocation — so on a root that is still being
-planned into, run `worker` again when planning finishes.
-
-Bound a temporary node with `--max-tasks`:
-
-```bash
-runforge worker "$REPORT_ROOT" --max-tasks 2
-```
-
-`N` must be positive. It means “complete `N` tasks,” not “inspect only `N`
-candidates.” Claim contention, stale-after-claim skips, and failed executions
-do not consume the completion quota; the worker continues scanning the initial
-snapshot after each of them. It stops when the quota is reached or when the
-snapshot is exhausted. Add `--stream-output` to mirror child output to the
-console while still writing `stdout.log` and `stderr.log`.
-
-## Reading The Summary
-
-```text
-Worker summary:
-  candidates: 5
-  selected: 2
-  completed: 2
-  failed: 0
-  skipped: 1
-    non-runnable: 1
-    claim contention: 0
-    stale after claim: 0
-  deferred: 3
-  invalid: 0
-```
-
-`selected` counts tasks claimed for processing by this invocation. `completed`
-counts successful tasks and is the counter bounded by `--max-tasks`. `deferred`
-counts runnable snapshot entries that were not scanned because the task quota
-was reached. The three skip reasons answer different questions. **non-runnable**
-counts plans
-that were never eligible, including ones an earlier invocation already
-completed. **claim contention** counts plans another worker owned. **stale after
-claim** counts plans that were finished by a peer between this worker's scan and
-its claim — a normal outcome when several workers share a root, not a failure.
-
-Exit status is `2` when any candidate's metadata is invalid, `1` when a selected
-command fails, and `0` otherwise. Note that `2` takes precedence: it means the
-scan itself is untrustworthy, so a caller testing for `1` must not conclude that
-every candidate was inspected.
-
-## What The Worker Deliberately Does Not Do
-
-There is no lease, heartbeat, timeout, or automatic stale-task recovery. If a
-worker is killed while executing, its experiment stays `inprogress` with a claim
-that no live process owns. RunForge does not guess whether a long-running
-experiment is dead, because it cannot distinguish that from one that is merely
-slow.
-
-Recovery is therefore explicit and operator-confirmed.
-
-## Finding A Possibly-Stale Run
-
-The previous section describes what RunForge won't do automatically; this is
-how you find a candidate for the manual recovery below, instead of already
-having to know one exists. Add `--older-than` or `--updated-before` to
-`discover` to flag `inprogress` experiments that started a while ago:
-
-```bash
 runforge discover "$REPORT_ROOT" --older-than 6h
-runforge discover "$REPORT_ROOT" --updated-before 2026-08-01T00:00:00Z
+runforge workspaces "$WORKSPACE_ROOT"
 ```
 
-Both are opt-in and purely a hint — nothing is retried, no claim is touched,
-and passing neither leaves `discover`'s output exactly as it always was. A
-flagged experiment gets one extra line naming how long it's been running and,
-when the claim was acquired on this same host, whether that process is still
-alive:
+The first scan includes recently interrupted work too. The second adds age
+and local process hints to old inprogress records; it does not filter the list
+or establish that they expired. An interruption can happen before a workspace
+exists or after one is removed, so inspect reports even when no workspaces
+remain. A workspace may also belong to a currently running worker.
 
-```text
-inprogress | attempt=1 | name=baseline | source=main@a1b2c3d4 | path=/reports/main/01234567_baseline_0000
-  stale: inprogress for 8h12m, started 2026-08-12T02:00:00.000000Z — process appears dead: PID 4127 not running on node7
-```
+Use the state and ownership evidence to select the next action:
 
-"Process appears dead" only means the PID isn't currently running on *this*
-host — not proof the original worker is gone, since a reused PID or a claim
-made from a different host both read as "cannot verify liveness" instead.
-Confirm independently before using `retry --force`, exactly as below.
+| Recorded situation | Action |
+| --- | --- |
+| created or init, without a claim | Execute with run. |
+| inprogress, or any remaining claim | Identify the old owner and confirm both worker and child stopped before recovery. Leave live or uncertain work alone. |
+| failed, without a claim | Retry normally when another attempt is wanted. |
+| completed | Keep the result; run and retry skip it. |
+| held | Release the scheduling hold before attempting execution or retry. Release does not clear a claim. |
+| Invalid metadata | Read the diagnostic and preserve the record/history while investigating; force does not repair invalid metadata. |
 
-## Recovering An Interrupted Run
+Ordinary run continues unrelated runnable plans and skips inprogress or claimed
+work. A successful exit can therefore leave interrupted experiments unfinished.
+Inspect the summary and discover again after recovery.
 
-First find out who held the claim. Commands that refuse to act on a claimed
-experiment tell you:
+### Connect a leftover workspace to its experiment
 
-```text
-error: Experiment is already claimed: /reports/main/01234567_baseline_0000 (held by node7:48213 since 2026-07-30T09:15:02Z)
-```
-
-The owner defaults to `HOSTNAME:PID`, which you can check with `ps -p 48213` on
-that host. In containers and under batch schedulers that pair is often not
-resolvable from outside, so set `RUNFORGE_CLAIM_OWNER` to something you can
-check, such as a Slurm job id.
-
-After independently confirming the process has stopped:
+Workspace listing prints its recorded host, PID, owner, and source. For an exact
+match, read the workspace manifest and the candidate experiment's claim:
 
 ```bash
-runforge retry --force "$REPORT_ROOT/main/01234567_baseline_0000"
+python3 -m json.tool "$WORKSPACE/runforge-worker.json"
+python3 -m json.tool "$EXPERIMENT/claim/owner.json"
 ```
 
-`--force` is a single-controller escape hatch, not a concurrency guarantee.
-RunForge cannot prove another worker is inactive, so using it while the original
-process still runs can execute the experiment twice.
+Match the manifest's worker_id to the claim's token. Owner or PID alone is not
+unique: one runner can process several experiments, and PIDs can be reused.
+The startup report performs this join for affected experiments under its selected
+paths and current workspace parents. These manual checks work when investigating
+other workspace locations. A missing or unreadable record means the association
+is unknown; source identity alone is insufficient to establish which experiment
+owns a workspace.
 
-## Retry Semantics
+For Docker or a job scheduler, use its container/job history to establish that
+the old execution stopped. A PID absent from the current container does not
+establish that a process on another host or PID namespace stopped. For future
+runs, RUNFORGE_CLAIM_OWNER can record a container execution or scheduler job ID
+that you can trace externally.
 
-`retry` starts another attempt of the same immutable configuration. It does not
-resume a child process or select a checkpoint.
+### Restart confirmed interrupted experiments
 
-- `failed` retries normally.
-- `inprogress` requires `--force`.
-- A claimed experiment requires `--force` in any state, because a claim may mean
-  a live worker.
-- `completed` is rejected; successful history is not overwritten. Plan a new
-  experiment instead.
-- `created` and `init` are rejected because `run` already handles them.
-
-Before resetting anything, retry archives the previous status, logs, and
-artifacts under `attempt-NNNN/`. Archive failure aborts without changing
-runnable state, so a rejected retry leaves the experiment exactly as it was.
-
-The warning that a forced retry cannot prove the previous worker stopped is
-printed only when something was actually overridden — an `inprogress` state or a
-claim that had to be cleared — so it stays meaningful.
-
-## Running One Experiment Directly
-
-When you want a specific plan rather than whatever is available:
+Once both the former worker and child are confirmed stopped, name each affected
+experiment explicitly:
 
 ```bash
-runforge run "$REPORT_ROOT/main/01234567_baseline_0000"
+runforge retry --force --stream-output "$EXPERIMENT"
+runforge retry --force "$EXPERIMENT_A" "$EXPERIMENT_B"
 ```
 
-`run` uses the same claim-aware boundary as `worker`, so it is safe to use
-alongside workers on the same root. It returns the command's exit code.
+This recovers failed or inprogress experiments, clears any previous claim, and
+archives their previous attempt before starting a new one. Forced root-wide
+recovery is refused; runforge retry --force must receive experiment directories.
+For an interrupted created/init record that still has a claim, forced retry is
+not supported: it skips that state without clearing the claim. Preserve the
+record and investigate that claim separately; do not label it failed just to
+make retry accept it.
+
+Retry starts the recorded command as a new attempt. Git and snapshot sources use
+a fresh workspace; verified-directory sources execute in the original directory.
+It does not resume the old process. Application checkpoint recovery must be
+supported by the command and its checkpoint paths. Saved outputs move into
+attempt-NNNN, so inspect the archived checkpoint location before retry.
+
+After preserving anything needed from a confirmed abandoned workspace, remove
+that exact workspace and inspect the durable report again:
+
+```bash
+runforge workspaces "$WORKSPACE_ROOT" --remove "$WORKSPACE"
+runforge discover "$REPORT_ROOT"
+runforge run "$REPORT_ROOT"
+```
+
+Workspace removal is optional and separate from retry. It does not clear an
+experiment's claim or change its status. Keep live and unidentified workspaces.
+
+## Inspect published work
+
+```bash
+runforge discover "$REPORT_ROOT"
+runforge discover "$REPORT_ROOT" --older-than 6h
+runforge discover "$REPORT_ROOT" --started-before 2026-08-01T00:00:00Z
+```
+
+Discovery is read-only. It reports lifecycle, attempt, source, scheduling hold,
+and path. Experiments are leaves: captured inputs, artifacts, source snapshots,
+and retry archives beneath them are never discovered as additional experiments.
+Hidden publication staging directories and directory symlinks are excluded.
+A generic config.json alone does not hide plans below its directory. Damaged
+RunForge metadata is reported as invalid; it is never executed.
+
+Staleness flags are mutually exclusive hints based on start time, not automatic
+recovery. Local host/PID evidence cannot establish liveness across machines or
+PID namespaces. On Linux, a PID reused by a process started after the claim is
+reported as dead. The hint does not change a claim or status.
+
+## Execute available work
+
+```bash
+runforge run "$REPORT_ROOT"
+runforge run "$REPORT_ROOT" --max-tasks 2 --stream-output
+```
+
+Selection consumes a path-ordered queue. When that queue is exhausted, the same
+process discovers again and consumes newly published eligible plans. No scan runs
+while an experiment is executing. It exits when a refill has no unvisited
+eligible work, or its successful-completion quota is reached. It does not poll,
+wait for future publications after becoming idle, or run as a daemon.
+
+Only report-root selections refill. Explicit experiment leaves, including a
+new plan executed by launch, finish without another discovery scan. Mixed
+selections refill the report roots while retaining invocation-wide task counts.
+
+Claims decide ownership across multiple processes. Each task is claimed
+immediately before processing; status and scheduling metadata are reread under
+that ownership. Claimed plans are skipped without consuming a completion slot.
+Plans already attempted or contended during the invocation are not repeatedly
+requeued. Failed experiments require explicit retry and are never automatically
+reissued on refill.
+
+--max-tasks bounds successful completions across all refills, not attempts.
+Failures and contention do not consume the completion quota. A worker can
+therefore attempt more than N experiments before completing N.
+
+## Hold and release pending work
+
+```bash
+runforge schedule --hold "$EXPERIMENT"
+runforge schedule --release "$EXPERIMENT"
+```
+
+Holds are separate scheduling metadata in schedule.json; execution status,
+immutable configuration, attempts, logs, and artifacts remain unchanged. An
+absent schedule file means not held. Invalid scheduling metadata prevents
+selection and appears as invalid metadata. Priority controls are deferred.
+
+A successful hold prevents future execution. Hold/release acquire the same claim
+as execution, so an active claim is rejected. Release removes a scheduling hold;
+it never removes an execution claim. Running tasks finish normally.
+
+A plan held after queue creation is skipped at its execution boundary. A held
+plan released while other tasks run can become eligible on the next refill.
+An all-held or all-contended queue exits without a rescan busy loop.
+
+F schedule accepts multiple explicit experiment/report-root paths. It preflights
+discovery, deduplicates targets, and reports each successful edit. Busy-target
+errors return 2; edits already successfully applied to other targets remain.
+
+Hold/release can replace a malformed schedule.json under the same claim guard.
+They still require valid config.json and status.json. Bulk edits continue on
+valid experiments and report damaged metadata or busy targets with exit 2;
+one bad record does not block every valid experiment. Ordinary discovery and
+execution continue to reject malformed scheduling controls until repaired.
+
+## One specified plan
+
+```bash
+runforge run "$EXPERIMENT"
+```
+
+run accepts experiment or report-root paths, unions overlapping selections, and treats each experiment as a leaf. Completed, held, failed, or already-claimed plans are reported as skips. Exit 0 does not assert that every target completed.
+
+## Read outcomes
+
+The batch summary counts unique discovered candidates, selected attempts,
+successful completions, failures, non-runnable plans, claim contention,
+stale-after-claim skips, held plans, quota-deferred candidates, and invalid
+metadata. Held work is distinct from quota deferral. Counts reflect observed
+selection state; reaching the quota does not force a final discovery pass.
+
+Batch exit codes are 0 for no selected failure (including only skips), 1 for a
+selected failure, and 2 for invalid metadata or CLI/domain errors. Invalid
+metadata takes precedence over command failure. Individual child codes are
+stored in status.json. An execution failure does not discard durable results
+from other experiments.
+
+If a discovery root disappears or becomes unreadable during queue refill, the
+worker warns, stops refilling, and prints its accumulated summary with exit 2.
+Already completed work remains completed and is not reissued.
+
+## Interrupted runs and explicit retry
+
+A killed process can leave a workspace, inprogress status, and a claim behind.
+RunForge cannot resume the process or workspace, and does not infer abandonment
+from age. First independently establish that the worker and child processes
+have stopped, using the recorded host/owner and external process or job evidence.
+RUNFORGE_CLAIM_OWNER can identify a scheduler job when host:PID is insufficient.
+
+```bash
+runforge retry "$EXPERIMENT"
+runforge retry --force "$EXPERIMENT"
+```
+
+Retry archives previous status as status.snapshot.json and moves logs/artifacts
+into attempt-NNNN before making another attempt. Archive errors abort without
+silently losing history. Retry preparation errors count as invalid work (exit 2),
+with no selected or failed execution added. The same immutable configuration is executed anew;
+checkpoints are application-specific, not automatically selected by RunForge.
+A held experiment must be released before retrying.
+
+Force is an operator-confirmed escape hatch for interrupted or claimed work;
+it cannot prove that a former process stopped. Never force a live experiment.
+
+F retry can select failed plans under multiple roots. Force is refused unless
+every explicitly supplied path is itself an experiment directory. Completed and
+other ineligible states are skipped; failed attempts are retried once per
+invocation, not repeatedly until they succeed.
+
+A claimed failed experiment named explicitly is skipped with its recorded owner
+and force-recovery guidance. The skip still returns 0; it does not prove a retry
+ran. Confirm that the old worker and child stopped before using --force.
+
+## Temporary workspace identity and cleanup
+
+```bash
+runforge workspaces "$WORKSPACE_ROOT"
+runforge workspaces "$WORKSPACE_ROOT" --remove "$WORKSPACE"
+```
+
+Listing is read-only and shows recorded source identity/reference, host, PID,
+owner, and start time, or explicit unknown identity. These records do not prove
+that a process is alive or abandoned. Confirm independently before removal.
+Named workspaces must be found directly under the workspace root; unrelated
+paths are rejected. Git worktrees are deregistered rather than merely deleted.
+
+Set RUNFORGE_WORKSPACE_ROOT to an existing writable workspace parent for one location to inspect
+and clean. It is a temporary workspace root, not a report root. Experiment
+report directories, saved logs/artifacts, and immutable source records remain.

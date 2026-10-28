@@ -180,7 +180,7 @@ def test_worker_builds_git_worktree_under_the_configured_root(tmp_path, monkeypa
     )
     configured_root = tmp_path / "configured-root"
     configured_root.mkdir()
-    monkeypatch.setenv(sources_module.WORKER_ROOT_VARIABLE, str(configured_root))
+    monkeypatch.setenv(sources_module.WORKSPACE_ROOT_VARIABLE, str(configured_root))
     experiment = plan_experiment(
         PlanRequest(
             name="configured-root",
@@ -200,7 +200,7 @@ def test_worker_builds_git_worktree_under_the_configured_root(tmp_path, monkeypa
 
 def test_worker_reports_a_clear_error_for_an_unusable_configured_root(tmp_path, monkeypatch):
     repository = _repository(tmp_path, "print('must not run')\n")
-    monkeypatch.setenv(sources_module.WORKER_ROOT_VARIABLE, str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv(sources_module.WORKSPACE_ROOT_VARIABLE, str(tmp_path / "does-not-exist"))
     experiment = plan_experiment(
         PlanRequest(
             name="bad-root",
@@ -698,7 +698,7 @@ def test_worker_materializes_directory_snapshot_under_the_configured_root(tmp_pa
     )
     configured_root = tmp_path / "configured-root"
     configured_root.mkdir()
-    monkeypatch.setenv(sources_module.WORKER_ROOT_VARIABLE, str(configured_root))
+    monkeypatch.setenv(sources_module.WORKSPACE_ROOT_VARIABLE, str(configured_root))
     experiment = plan_experiment(
         PlanRequest(
             name="snapshot-configured-root",
@@ -780,18 +780,18 @@ def test_worker_snapshot_workspace_manifest_records_source_and_claim_identity(tm
 
 
 def test_configured_workspace_root_reads_the_environment_variable(tmp_path, monkeypatch):
-    monkeypatch.setenv(sources_module.WORKER_ROOT_VARIABLE, str(tmp_path))
+    monkeypatch.setenv(sources_module.WORKSPACE_ROOT_VARIABLE, str(tmp_path))
     assert sources_module._configured_workspace_root() == tmp_path.resolve()
 
 
 def test_configured_workspace_root_is_unset_by_default(monkeypatch):
-    monkeypatch.delenv(sources_module.WORKER_ROOT_VARIABLE, raising=False)
+    monkeypatch.delenv(sources_module.WORKSPACE_ROOT_VARIABLE, raising=False)
     assert sources_module._configured_workspace_root() is None
 
 
 @pytest.mark.parametrize("configured", ["", "   "])
 def test_configured_workspace_root_blank_value_is_unset(monkeypatch, configured):
-    monkeypatch.setenv(sources_module.WORKER_ROOT_VARIABLE, configured)
+    monkeypatch.setenv(sources_module.WORKSPACE_ROOT_VARIABLE, configured)
     assert sources_module._configured_workspace_root() is None
 
 

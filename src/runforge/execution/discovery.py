@@ -6,7 +6,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from runforge.infrastructure.storage import CONFIGURATION_FILE, STATUS_FILE, ExperimentDirectory
+from runforge.execution.scheduling import SchedulingError, is_held
+from runforge.infrastructure.json_store import load_json_object
+from runforge.infrastructure.storage import COMMAND_FILE, CONFIGURATION_FILE, STATUS_FILE, ExperimentDirectory
 from runforge.schemas.experiment import ExperimentConfiguration, ExperimentStatus
 
 
@@ -21,6 +23,7 @@ class DiscoveredExperiment:
     path: Path
     configuration: ExperimentConfiguration
     status: ExperimentStatus
+    held: bool = False
 
 
 @dataclass(frozen=True)
@@ -40,7 +43,7 @@ class DiscoveryResult:
     diagnostics: tuple[DiscoveryDiagnostic, ...]
 
 
-def discover_experiments(root: Path = Path(".")) -> DiscoveryResult:
+def discover_experiments(root: Path = Path("."), *, read_scheduling: bool = True) -> DiscoveryResult:
     """Recursively discover valid experiments below root without mutation."""
     discovery_root = _resolve_root(root)
     candidates: list[Path] = []
@@ -63,14 +66,19 @@ def discover_experiments(root: Path = Path(".")) -> DiscoveryResult:
                 name for name in directory_names if not name.startswith(".") and not (current / name).is_symlink()
             )
             names = set(file_names)
-            if CONFIGURATION_FILE in names or STATUS_FILE in names:
+            boundary, metadata_diagnostics = _inspect_experiment_boundary(current, names)
+            diagnostics.extend(metadata_diagnostics)
+            if boundary:
                 candidates.append(current.resolve())
+                # Inputs, outputs, captured source and retry archives are payloads,
+                # even when they contain complete experiment metadata themselves.
+                directory_names.clear()
     except OSError as error:
         raise DiscoveryError(f"Could not scan discovery root {discovery_root}: {error}") from error
 
     experiments: list[DiscoveredExperiment] = []
     for candidate in sorted(candidates):
-        experiment, diagnostic = _load_candidate(candidate)
+        experiment, diagnostic = _load_candidate(candidate, read_scheduling=read_scheduling)
         if experiment is not None:
             experiments.append(experiment)
         if diagnostic is not None:
@@ -101,6 +109,8 @@ def _resolve_root(root: Path) -> Path:
 
 def _load_candidate(
     candidate: Path,
+    *,
+    read_scheduling: bool,
 ) -> tuple[DiscoveredExperiment | None, DiscoveryDiagnostic | None]:
     layout = ExperimentDirectory(candidate)
     if not layout.configuration_file.is_file():
@@ -109,6 +119,51 @@ def _load_candidate(
         return None, DiscoveryDiagnostic(candidate, f"missing {STATUS_FILE}")
     try:
         configuration, status = layout.load_metadata()
-    except ValueError as error:
+        held = is_held(layout) if read_scheduling else False
+    except (ValueError, SchedulingError) as error:
         return None, DiscoveryDiagnostic(candidate, str(error))
-    return DiscoveredExperiment(candidate, configuration, status), None
+    return DiscoveredExperiment(candidate, configuration, status, held), None
+
+
+def _inspect_experiment_boundary(path: Path, names: set[str]) -> tuple[bool, tuple[DiscoveryDiagnostic, ...]]:
+    """Require independent RunForge evidence before pruning malformed metadata."""
+    metadata = names & {CONFIGURATION_FILE, STATUS_FILE}
+    if not metadata:
+        return False, ()
+    if COMMAND_FILE in names:
+        return True, ()
+    diagnostics = []
+    for filename in sorted(metadata):
+        try:
+            kind = load_json_object(path / filename).get("kind")
+        except ValueError as error:
+            diagnostics.append(DiscoveryDiagnostic(path / filename, str(error)))
+            continue
+        if kind in {"runforge_experiment_configuration", "runforge_experiment_status"}:
+            return True, ()
+    return False, tuple(diagnostics)
+
+
+def discover_paths(
+    paths: tuple[Path, ...], *, require_each: bool = False, read_scheduling: bool = True
+) -> DiscoveryResult:
+    """Union explicit report roots/experiment leaves by resolved path."""
+    if not paths:
+        paths = (Path("."),)
+    experiments: dict[Path, DiscoveredExperiment] = {}
+    diagnostics: dict[tuple[Path, str], DiscoveryDiagnostic] = {}
+    first_root: Path | None = None
+    for path in paths:
+        result = discover_experiments(path, read_scheduling=read_scheduling)
+        if first_root is None:
+            first_root = result.root
+        if require_each and not result.experiments and not result.diagnostics:
+            raise DiscoveryError(f"No experiments found under: {result.root}")
+        experiments.update((item.path, item) for item in result.experiments)
+        diagnostics.update(((item.path, item.message), item) for item in result.diagnostics)
+    assert first_root is not None
+    return DiscoveryResult(
+        first_root,
+        tuple(experiments[path] for path in sorted(experiments)),
+        tuple(diagnostics[key] for key in sorted(diagnostics)),
+    )

@@ -23,6 +23,7 @@ from runforge.schemas.source import GIT_PATCH_FILE
 
 CONFIGURATION_FILE = "config.json"
 STATUS_FILE = "status.json"
+SCHEDULE_FILE = "schedule.json"
 COMMAND_FILE = "cmd.sh"
 ARTIFACTS_DIRECTORY = "artifacts"
 STDOUT_LOG_FILE = "stdout.log"
@@ -52,6 +53,11 @@ class ExperimentDirectory:
     @property
     def status_file(self) -> Path:
         return self.root / STATUS_FILE
+
+    @property
+    def schedule_file(self) -> Path:
+        """Optional scheduling controls, separate from lifecycle and configuration."""
+        return self.root / SCHEDULE_FILE
 
     @property
     def command_file(self) -> Path:

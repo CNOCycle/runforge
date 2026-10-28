@@ -53,16 +53,16 @@ def test_cli_plans_and_runs_one_explicit_experiment(tmp_path, capsys):
     assert main(["run", "--stream-output", str(experiment)]) == 0
     output = capsys.readouterr().out
     assert re.search(
-        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Preparing experiment: "
+        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Preparing experiment \[1/1\]: "
         rf"{re.escape(str(experiment))}$",
         output,
         re.MULTILINE,
     )
-    assert "Executing command: python train.py" in output
+    assert "Executing command [1/1]: python train.py" in output
     assert "  output mode: streaming and logging" in output
     assert "planned command ran" in output
     assert re.search(
-        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Experiment completed with exit code 0: "
+        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Experiment completed with exit code 0 \[1/1\]: "
         rf"{re.escape(str(experiment))}$",
         output,
         re.MULTILINE,
@@ -147,8 +147,8 @@ def test_cli_creates_a_pinned_cartesian_matrix(tmp_path, capsys):
     assert (
         main(
             [
-                "matrix",
-                "--matrix-file",
+                "plan",
+                "--matrix",
                 str(matrix_file),
                 "--source-mode",
                 "pinned-git",
@@ -168,7 +168,7 @@ def test_cli_creates_a_pinned_cartesian_matrix(tmp_path, capsys):
         == 0
     )
     full_output = capsys.readouterr().out
-    assert "RunForge matrix effective arguments:" in full_output
+    assert "RunForge plan effective arguments:" in full_output
     assert f"  matrix file: {matrix_file}" in full_output
     assert "  matrix combinations: 4" in full_output
     assert "  source mode: pinned-git" in full_output
@@ -198,8 +198,8 @@ def test_cli_creates_a_current_head_cartesian_matrix(tmp_path, capsys):
     assert (
         main(
             [
-                "matrix",
-                "--matrix-file",
+                "plan",
+                "--matrix",
                 str(matrix_file),
                 "--source-path",
                 str(repository),
@@ -252,15 +252,15 @@ def test_cli_launches_a_new_experiment_immediately(tmp_path, capsys):
     assert "RunForge launch effective arguments:" in output
     assert "  stream output: enabled" in output
     assert re.search(
-        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Preparing experiment: "
+        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Preparing experiment \[1/1\]: "
         rf"{re.escape(str(experiment))}$",
         output,
         re.MULTILINE,
     )
-    assert "Executing command: python train.py" in output
+    assert "Executing command [1/1]: python train.py" in output
     assert "planned command ran" in output
     assert re.search(
-        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Experiment completed with exit code 0: "
+        rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Experiment completed with exit code 0 \[1/1\]: "
         rf"{re.escape(str(experiment))}$",
         output,
         re.MULTILINE,
@@ -313,17 +313,17 @@ def test_worker_cli_prints_effective_arguments_progress_and_summary(tmp_path, ca
         )
     )
 
-    assert main(["worker", str(reports), "--max-tasks", "1"]) == 0
+    assert main(["run", str(reports), "--max-tasks", "1"]) == 0
 
     output = capsys.readouterr().out
-    assert re.search(r"^\[\d{4}-\d{2}-\d{2}T[^]]+Z\] RunForge worker effective arguments:$", output, re.MULTILINE)
-    assert f"  root: {reports.resolve()}" in output
+    assert "RunForge run effective arguments:" in output
+    assert f"  paths: {reports.resolve()}" in output
     assert "  max tasks: 1" in output
     assert "  stream output: disabled" in output
     assert re.search(r"Preparing experiment \[1/1\]:", output)
     assert "Executing command [1/1]: python train.py" in output
     assert "Experiment completed with exit code 0 [1/1]:" in output
-    assert "Worker summary:" in output
+    assert "Execution summary:" in output
     assert "  candidates: 1" in output
     assert "  selected: 1" in output
     assert "  completed: 1" in output
@@ -352,7 +352,7 @@ def test_worker_cli_returns_one_when_a_selected_command_fails(tmp_path, capsys):
     reports = tmp_path / "reports"
     _plan_worker_experiment(tmp_path, reports, "failing", "raise SystemExit(7)\n")
 
-    assert main(["worker", str(reports)]) == 1
+    assert main(["run", str(reports)]) == 1
 
     output = capsys.readouterr().out
     assert re.search(r"^\[\d{4}-\d{2}-\d{2}T[^]]+Z\]   completed: 0$", output, re.MULTILINE)
@@ -368,7 +368,7 @@ def test_worker_cli_reports_invalid_metadata_ahead_of_a_failed_command(tmp_path,
 
     # Invalid metadata outranks a failed command: 2 means the scan itself is untrustworthy,
     # so a caller testing for 1 must not conclude that every candidate was inspected.
-    assert main(["worker", str(reports)]) == CLI_ERROR_EXIT
+    assert main(["run", str(reports)]) == CLI_ERROR_EXIT
 
     output = capsys.readouterr().out
     assert re.search(r"^\[\d{4}-\d{2}-\d{2}T[^]]+Z\]   failed: 1$", output, re.MULTILINE)
@@ -390,8 +390,8 @@ def test_matrix_cli_reports_created_plans_when_the_mapping_cannot_be_saved(tmp_p
     assert (
         main(
             [
-                "matrix",
-                "--matrix-file",
+                "plan",
+                "--matrix",
                 str(matrix_file),
                 "--source-path",
                 str(repository),

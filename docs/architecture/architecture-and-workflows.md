@@ -84,13 +84,13 @@ sequenceDiagram
         Executor->>Report: update status, logs, artifacts
         Report-->>User: exit code
     else matrix then worker
-        User->>CLI: runforge matrix
+        User->>CLI: runforge plan --matrix FILE
         CLI->>Planner: expand combinations
         Planner->>Report: publish many plans
         CLI->>Report: save mapping artifact
         CLI-->>User: plan paths and mapping
-        User->>CLI: runforge worker REPORT_ROOT
-        CLI->>Worker: scan one snapshot
+        User->>CLI: runforge run REPORT_ROOT
+        CLI->>Worker: discover; refill after queue exhaustion
         Worker->>Report: claim runnable plans
         Worker->>Executor: execute claimed plans
         Executor->>Report: update status, logs, artifacts
@@ -99,7 +99,7 @@ sequenceDiagram
         User->>CLI: runforge discover REPORT_ROOT
         CLI->>Report: read published metadata
         Report-->>User: statuses and diagnostics
-        User->>CLI: runforge matrix-show ARTIFACT
+        User->>CLI: runforge mapping ARTIFACT
         CLI->>Report: read mapping artifact
         Report-->>User: configuration table
     else retry

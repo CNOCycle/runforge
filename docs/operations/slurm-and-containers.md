@@ -24,12 +24,12 @@ a **batch scheduler**, a job id is far more useful than a pid, because
 ## Recording A Resolvable Identity
 
 Set `RUNFORGE_CLAIM_OWNER` in the worker's environment. Every claim that process
-takes uses it, including from `runforge worker`:
+takes uses it, including from `runforge run`:
 
 ```bash
 # Slurm batch script
 export RUNFORGE_CLAIM_OWNER="slurm:${SLURM_JOB_ID}"
-runforge worker "$REPORT_ROOT"
+runforge run "$REPORT_ROOT"
 ```
 
 ```bash
