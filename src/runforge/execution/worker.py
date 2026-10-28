@@ -68,6 +68,7 @@ class BatchRequest:
     retry: bool = False
     force: bool = False
     require_each: bool = True
+    reuse_artifacts: bool = False
 
 
 @dataclass(frozen=True)
@@ -185,6 +186,8 @@ def execute_paths(
     limit = request.max_tasks
     if isinstance(limit, bool) or (limit is not None and (not isinstance(limit, int) or limit <= 0)):
         raise WorkerError("max_tasks must be a positive integer or None")
+    if request.reuse_artifacts and not request.retry:
+        raise WorkerError("Artifact reuse requires retry")
     initial = discover_paths(request.paths, require_each=request.require_each)
     if request.force:
         experiments = {item.path for item in initial.experiments}
@@ -402,7 +405,9 @@ def _claim_failure_outcome(experiment, request, progress, error):
 
 
 def _prepare_candidate_retry(experiment, claim, request, progress, overridden) -> None:
-    preparation = prepare_retry(experiment.root, force=request.force, claim=claim)
+    preparation = prepare_retry(
+        experiment.root, force=request.force, claim=claim, reuse_artifacts=request.reuse_artifacts
+    )
     if preparation.forced or overridden:
         _notify_progress(
             progress,

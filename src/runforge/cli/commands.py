@@ -42,6 +42,7 @@ def run(arguments: argparse.Namespace) -> int:
     ]
     if arguments.retry:
         rows.append(("force", "enabled" if arguments.force else "disabled"))
+        rows.append(("reuse artifacts", "enabled" if arguments.reuse_artifacts else "disabled"))
     else:
         rows.append(("max tasks", str(arguments.max_tasks) if arguments.max_tasks else "unlimited"))
     print_effective_arguments(arguments.command_name, rows)
@@ -52,6 +53,7 @@ def run(arguments: argparse.Namespace) -> int:
             arguments.stream_output,
             retry=arguments.retry,
             force=arguments.force,
+            reuse_artifacts=arguments.reuse_artifacts,
         ),
         progress=print_worker_progress,
     )
