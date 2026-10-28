@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Literal
 
 from runforge.execution.discovery import discover_experiments
-from runforge.execution.errors import ExperimentNotRunnableError, WorkerError
+from runforge.execution.errors import ExperimentHeldError, ExperimentNotRunnableError, WorkerError
 from runforge.execution.process import CommandExecutionError, run_command
+from runforge.execution.scheduling import is_held
 from runforge.execution.sources import preparation_for
 from runforge.execution.verification import verify_planned_inputs
 from runforge.infrastructure.claims import (
@@ -240,6 +241,8 @@ def _run_claimed_experiment(
         )
         raise failure from error
     verify_claim_owner(experiment, claim)
+    if is_held(experiment):
+        raise ExperimentHeldError(f"Experiment is held; release its scheduling hold first: {experiment.root}")
     if status.state not in {"created", "init"}:
         error = ExperimentNotRunnableError(f"Experiment is not runnable from state {status.state!r}")
         _notify_progress(

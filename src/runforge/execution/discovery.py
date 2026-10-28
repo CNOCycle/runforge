@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from runforge.execution.scheduling import SchedulingError, is_held
 from runforge.infrastructure.json_store import load_json_object
 from runforge.infrastructure.storage import COMMAND_FILE, CONFIGURATION_FILE, STATUS_FILE, ExperimentDirectory
 from runforge.schemas.experiment import ExperimentConfiguration, ExperimentStatus
@@ -22,6 +23,7 @@ class DiscoveredExperiment:
     path: Path
     configuration: ExperimentConfiguration
     status: ExperimentStatus
+    held: bool = False
 
 
 @dataclass(frozen=True)
@@ -115,9 +117,10 @@ def _load_candidate(
         return None, DiscoveryDiagnostic(candidate, f"missing {STATUS_FILE}")
     try:
         configuration, status = layout.load_metadata()
-    except ValueError as error:
+        held = is_held(layout)
+    except (ValueError, SchedulingError) as error:
         return None, DiscoveryDiagnostic(candidate, str(error))
-    return DiscoveredExperiment(candidate, configuration, status), None
+    return DiscoveredExperiment(candidate, configuration, status, held), None
 
 
 def _inspect_experiment_boundary(path: Path, names: set[str]) -> tuple[bool, tuple[DiscoveryDiagnostic, ...]]:

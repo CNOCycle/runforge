@@ -9,3 +9,7 @@ class WorkerError(RuntimeError):
 
 class ExperimentNotRunnableError(WorkerError):
     """Raised when a claimed experiment was completed or changed by another worker."""
+
+
+class ExperimentHeldError(ExperimentNotRunnableError):
+    """Raised when a scheduling hold prevents a claimed execution."""
