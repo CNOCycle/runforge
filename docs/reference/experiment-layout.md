@@ -113,3 +113,12 @@ The directory's existence is the lock — it is created with an exclusive
 operation, so at most one process can hold it. `token` is a random identifier
 that fences every status write; `owner` is diagnostic and names the process to
 check before forcing recovery.
+
+
+## Scheduling holds
+
+An optional schedule.json contains kind=runforge_schedule, schema_version=1,
+a boolean held, and updated_at. An absent file means no hold. This file is
+separate from immutable config.json and lifecycle status.json. Hold/release
+are claim-coordinated and do not reset attempts or alter result history.
+Priority metadata and commands are deferred.

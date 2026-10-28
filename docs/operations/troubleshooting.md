@@ -56,52 +56,23 @@ the plans themselves are published and runnable. The mapping is derived from
 each `config.json`, so nothing is lost permanently. Check disk space and
 permissions on the report root.
 
-## Leftover `runforge-worker-*` directories
+## Leftover runforge-worker-* directories
 
-A killed worker leaves its workspace behind; cleanup runs in Python and does
-not run on `SIGKILL`. The directory name identifies its source, so you no
-longer have to search every candidate repository to find the owner:
-
-```text
-runforge-worker-repo_A-865dc691-20260730T181530Z-p4127-a13f
-runforge-worker-source_A-nongit-4f82a1c0-20260730T182011Z-p4198-c82d
-```
-
-Reading left to right: the repository or source-directory name, the commit
-or content digest (first eight characters), when the worker started (UTC),
-its process ID, and a nonce distinguishing simultaneous workers from the
-same source. A `-nongit-` marker after the name means a directory-snapshot
-or verified-directory source, not a Git repository.
-
-For the full, untruncated identity — including who claimed the experiment
-that built it — read the workspace's manifest:
+Normal execution removes its temporary workspace after each experiment, including
+ordinary command failures. An abrupt kill, crash, or cleanup error can leave it
+behind. Workspace contents do not provide process resume or reattachment.
 
 ```bash
-runforge workspaces PATH
+runforge workspaces "$WORKSPACE_ROOT"
+runforge workspaces "$WORKSPACE_ROOT" --remove "$WORKSPACE"
 ```
 
-This is read-only and safe to run on a live workspace; it only reports what
-the manifest already recorded when the workspace was created, not whether
-the worker is still running.
+The first form lists recorded identity and explicit unknowns without deletion.
+The second removes only exact named discovered paths. The operator must verify
+that the worker and child processes stopped; host/PID/owner records and age alone
+are not proof. Saved experiment reports are separate from temporary workspaces.
+Git worktrees are deregistered correctly on removal.
 
-To remove one, list what is actually there first, then confirm exactly which
-paths to remove — nothing is ever selected automatically, and in particular
-never by age:
-
-```bash
-runforge workspaces ROOT
-runforge workspaces ROOT --remove PATH
-```
-
-The first form only lists; it changes nothing. The second removes exactly
-the paths passed to `--remove`, which must be among the ones just listed —
-a typo'd or unrelated path is rejected rather than silently ignored. A
-Git-sourced workspace is deregistered as a worktree (`git worktree remove`
-under the hood), not just deleted, so the repository's own worktree list
-stays accurate; a non-Git workspace is a plain materialized copy with no
-registration to clean up.
-
-Set `RUNFORGE_WORKSPACE_ROOT` (see [the CLI reference](../reference/cli.md) and
-[Shared filesystems](shared-filesystems.md)) so `worker-cleanup` (and
-`ROOT` above) has one place to scan, instead of searching beside each
-repository and the host's temporary directory separately.
+Set RUNFORGE_WORKSPACE_ROOT to an existing writable parent to keep workspaces in one known place.
+See [the CLI reference](../reference/cli.md) and
+[shared filesystems](shared-filesystems.md).

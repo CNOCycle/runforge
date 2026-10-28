@@ -1,109 +1,66 @@
-# Worker Lifecycle And Claims
+# Worker lifecycle, lazy refill, and claims
 
-The worker is a thin wrapper around the single-experiment executor. It adds two
-responsibilities and no more: selecting ready experiments from one discovery
-snapshot, and atomically claiming each one immediately before delegating.
-
-It is not a daemon, scheduler, durable queue, or task-recovery service. This
-page explains why.
-
-## The Lifecycle
+The command runforge run selects work from report roots while the shared
+single-experiment executor prepares sources, executes, and writes results.
+It is a finite lazy scheduler: discovery occurs on startup and when a candidate
+queue is exhausted, rather than on a periodic timer.
 
 ```text
-scan the report root once
-    |
-    +-- created/init -> ordered candidate list
-    +-- inprogress/completed/failed -> ignore
-    |
-for each candidate while the task quota remains:
-    atomic claim -> reread status -> execute, or skip and continue
-    |
-candidates exhausted or task quota reached
-    |
-print summary and exit
+discover published experiment leaves
+  -> path-ordered eligible queue
+  -> claim one task
+  -> reread status and held metadata
+  -> verify inputs and recorded source
+  -> execute and save result with ownership fencing
+  -> release claim
+queue exhausted -> discover again
+no unvisited eligible work, or completion quota reached -> summary and exit
 ```
 
-```mermaid
-flowchart TD
-    Scan[Scan report root once] --> Candidates{Runnable created/init candidates?}
-    Candidates -- No --> Summary[Print summary and exit]
-    Candidates -- Yes --> Budget{Task quota reached?}
-    Budget -- Yes --> Summary
-    Budget -- No --> Select[Select next candidate]
-    Select --> Claim{Atomic claim succeeds?}
-    Claim -- Contended --> SkipContention[Count claim contention] --> More{More candidates?}
-    Claim -- Error --> FailedClaim[Count failed and warn] --> More
-    Claim -- Acquired --> Reread[Reread status]
-    Reread --> Runnable{Still runnable?}
-    Runnable -- No --> ReleaseStale[Release claim and count stale-after-claim] --> More
-    Runnable -- Yes --> Verify{Source and input verification passes?}
-    Verify -- No --> RecordFailure[Record failed status] --> Release
-    Verify -- Yes --> Execute[Execute command]
-    Execute --> Save[Save result with claim fencing]
-    Save --> Release[Release claim] --> More
-    More -- Yes --> Budget
-    More -- No --> Summary
-```
+Multiple workers may select identical paths. Exclusive claim-directory creation
+and random ownership tokens establish ownership; order/start-time gaps do not.
+Post-claim rereads prevent a stale snapshot from rerunning a peer's completed
+plan. Every status write verifies the token. Claim cleanup errors do not turn
+an already recorded successful task into a failure.
 
-The diagram shows why a worker can safely share one report root with peers:
-claim creation is the ownership boundary, and status writes are fenced by the
-claim token.
+## Experiment boundaries
 
-There is no final rescan, idle scan, poll interval, pending queue, or wait for
-other workers. A finite quota is based on successful completions, so contention,
-stale candidates, and failed executions do not end a worker early; the worker
-continues through the initial snapshot. Work created after the snapshot belongs
-to a later invocation.
+An experiment is a discovery leaf. Discovery stops before its inputs, artifacts,
+source copy, and attempt archives. A metadata file plus the generated cmd.sh,
+or a parseable RunForge metadata kind identifies a boundary.
+A lone ordinary application config does not define a plan. Recognized incomplete
+or malformed experiment metadata is diagnostic, never executable. A standalone
+config.json or status.json that cannot be parsed is reported. Without independent
+RunForge evidence, discovery continues below that directory so unrelated files
+cannot hide real experiments. Directory
+symlinks and hidden publication staging trees are not followed.
 
-## Why The Claim, Not The Ordering
+## Holds and ownership
 
-Every worker may compute the same candidate order. A startup time gap usually
-reduces contention, but ordering and timing are not correctness mechanisms —
-only the atomic claim decides ownership.
+schedule.json stores a versioned scheduling hold independently of status.json
+and config.json. Hold/release acquire execution's claim before validation and an
+atomic metadata update. An acquired execution claim wins over a concurrent edit;
+a successful hold is reread by future execution before any attempt begins.
+No timeout, lease, heartbeat, priority, or process preemption is introduced.
 
-A claim is a directory created with an exclusive operation. Its existence is the
-lock; creation either succeeds for exactly one process or fails with
-`FileExistsError` for the rest. Replacing a JSON file could never provide this,
-which is why a claim is never acquired or transferred by writing status.
+## Refill accounting
 
-## Post-Claim Reread
+Completion quotas and attempted/contended path sets belong to the invocation,
+not each snapshot. Failed tasks are not automatically retried; contended paths
+are not repeatedly scanned in a busy loop. Held paths can become eligible after
+release at a later refill while other tasks remain. If no work is available,
+the process exits; future publication requires another invocation.
 
-Winning the claim is not sufficient. The snapshot may be stale: a peer may have
-completed the experiment between the scan and the claim. The worker therefore
-rereads status after claiming and, if the experiment is no longer runnable,
-records it as *stale after claim* rather than as a failure.
+## Failure and recovery
 
-That distinction matters in practice. Without it, a healthy multi-worker run
-reports spurious failures for work that actually succeeded.
+An abrupt kill can bypass Python cleanup, leaving a workspace, claim, and
+inprogress status. There is no process reattachment, checkpoint selection,
+liveness lease, or automatic recovery. Explicit forced retry requires independent
+operator confirmation; it is not a guarantee against a still-live prior child.
+Previous attempt history is archived before another attempt begins. Normal retry
+preparation and execution share claim ownership.
 
-## Ownership Fencing
-
-Every status write is fenced by the claim token. If ownership changed — because
-an operator forced recovery, for instance — the write is refused and the worker
-stops mutating the experiment.
-
-The token is a random 128-bit value, unrelated to any host or timestamp, so it
-cannot be guessed or reconstructed by a competing process. The `owner` field
-beside it is diagnostic only and never consulted when deciding ownership; it
-exists so a human can identify which process to check.
-
-## What Happens When A Worker Dies
-
-The experiment stays `inprogress` with a claim no live process owns. RunForge
-does not guess whether a long-running experiment is dead, because it cannot
-distinguish that from one that is merely slow. Recovery is explicit and
-operator-confirmed through `retry --force`.
-
-Leases, heartbeats, automatic stale-claim recovery, and bounded reissue are
-deliberately absent. They were designed and rejected as the *foundation* for
-lightweight execution: making a persistent lease-aware worker the basis would
-have imposed timing assumptions, clock-skew tolerances, and false-recovery risk
-on the simple local case that needs none of it. They remain possible as a
-separate future worker built on the same ownership boundary.
-
-## Release Is Best-Effort
-
-If a claim cannot be released after execution, the worker warns but keeps the
-recorded result. The experiment completed; failing it because cleanup failed
-would misreport durable work. The leaked claim needs an operator, and the
-warning says so.
+Workspace identity is diagnostic only. Listing/inspection is not an abandonment
+check. Cleanup removes only explicitly named discovered workspaces, including
+Git worktree deregistration. The workspace root (RUNFORGE_WORKSPACE_ROOT) is separate from the
+persistent experiment report root.

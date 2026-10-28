@@ -67,7 +67,8 @@ equivalent entry point.
 ## Quick Start
 
 Choose the source repository and a persistent report root explicitly. If
-`--out-dir` is omitted, RunForge uses `$REPO/reports` by default:
+`--out-dir` is omitted, RunForge uses `$REPO/reports` by default. Before execution,
+you can also [choose where workers run](#choose-where-workers-run).
 
 ```bash
 REPO=/path/to/your-project
@@ -109,8 +110,47 @@ $REPO/reports/main/01234567_baseline_0000
 `COUNT` starts at `0` and increments when a matching experiment directory already
 exists.
 
-Run that exact directory on the same or another machine with access to the
-recorded repository:
+### Choose where workers run
+
+Workers need a directory in which to execute your source. The default depends
+on the source mode:
+
+| Source mode | Default working directory |
+| --- | --- |
+| current-head / pinned-git | A new runforge-worker-* directory beside the source repository. For /work/project, this is /work/runforge-worker-*. |
+| directory-snapshot | A captured source copy inside runforge-worker-* under the system temporary directory, usually /tmp. |
+| verified-directory | The original source directory; no temporary workspace is created. |
+
+To put Git and snapshot workspaces in one location of your choice, create a
+writable parent and set RUNFORGE_WORKSPACE_ROOT in the shell that starts workers:
+
+```bash
+WORKSPACE_ROOT=/path/to/runforge-workspaces
+mkdir -p "$WORKSPACE_ROOT"
+export RUNFORGE_WORKSPACE_ROOT="$WORKSPACE_ROOT"
+```
+
+This setting applies to run, retry, and launch. It controls temporary working
+copies; --out-dir / REPORT_ROOT controls saved plans, logs, and artifacts.
+Set it on each worker machine or container before execution, rather than in a
+plan's --env-file, which supplies the child command's environment. Changing it
+affects future workspaces and does not move existing ones. verified-directory
+continues to execute in its original source directory.
+
+Inspect the chosen workspace parent with:
+
+```bash
+runforge workspaces "$WORKSPACE_ROOT"
+```
+
+With RUNFORGE_WORKSPACE_ROOT set, plain runforge workspaces uses that parent too.
+When unset, workspace listing scans the current directory; pass the source
+repository's parent or the snapshot temporary parent explicitly to inspect
+default workspaces. See [workers and recovery](docs/guides/workers-and-recovery.md)
+for leftovers after interrupted execution.
+
+Run the experiment directory printed by planning on the same or another machine
+with access to the recorded repository:
 
 ```bash
 runforge run "$REPO/reports/main/01234567_baseline_0000"
@@ -158,6 +198,11 @@ the lifecycle messages also identify the active `stdout.log` and `stderr.log`
 paths.
 
 ## Retry A Failed Or Interrupted Experiment
+
+After a container restart or killed worker, start with the
+[pre-start inspection and recovery workflow](docs/guides/workers-and-recovery.md#before-starting-again-after-a-restart).
+It explains how to identify interrupted experiments from leftover workspaces,
+confirm that the old execution stopped, retry the same plan, and clean up.
 
 Start another attempt of the same immutable configuration, archiving the
 previous one under `attempt-NNNN/`:
