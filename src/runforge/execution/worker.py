@@ -1,16 +1,18 @@
-"""One-shot execution of one explicit planned experiment directory."""
+"""Claim-protected experiment execution and finite lazy queue processing."""
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from runforge.execution.discovery import discover_experiments
+from runforge.execution.discovery import DiscoveredExperiment, DiscoveryError, DiscoveryResult, discover_paths
 from runforge.execution.errors import ExperimentHeldError, ExperimentNotRunnableError, WorkerError
 from runforge.execution.process import CommandExecutionError, run_command
-from runforge.execution.scheduling import is_held
+from runforge.execution.retry import RetryError, acquire_retry_claim, is_retryable_state, prepare_retry
+from runforge.execution.scheduling import SchedulingError, is_held
 from runforge.execution.sources import preparation_for
 from runforge.execution.verification import verify_planned_inputs
 from runforge.infrastructure.claims import (
@@ -40,11 +42,31 @@ class WorkerResult:
     stale_skipped: int
     deferred: int
     invalid: int
+    held: int = 0
 
     @property
     def skipped(self) -> int:
         """Total work skipped, derived so it cannot drift from its reasons."""
-        return self.not_runnable + self.claim_contended + self.stale_skipped
+        return self.not_runnable + self.claim_contended + self.stale_skipped + self.held
+
+    @property
+    def exit_code(self) -> int:
+        """Aggregate outcome; successful skips do not assert target completion."""
+        if self.invalid:
+            return 2
+        return 1 if self.failed else 0
+
+
+@dataclass(frozen=True)
+class BatchRequest:
+    """Selection policy for one finite, lazily refilled execution invocation."""
+
+    paths: tuple[Path, ...]
+    max_tasks: int | None = None
+    stream_output: bool = False
+    retry: bool = False
+    force: bool = False
+    require_each: bool = True
 
 
 @dataclass(frozen=True)
@@ -70,6 +92,19 @@ class WorkerProgressEvent:
     error: str | None = None
     task_index: int | None = None
     task_total: int | None = None
+    environment_keys: tuple[str, ...] | None = None
+    artifact_directory: Path | None = None
+    attempt: int | None = None
+
+
+@dataclass
+class _ExecutionProgress:
+    progress: Callable[[WorkerProgressEvent], None] | None
+    failed: bool = False
+
+    def __call__(self, event: WorkerProgressEvent) -> None:
+        self.failed = self.failed or event.phase == "failed"
+        _notify_progress(self.progress, event)
 
 
 def run_experiment(
@@ -112,18 +147,21 @@ def run_experiment(
         raise WorkerError(str(error)) from error
     finally:
         if owned_claim is not None:
-            try:
-                release_claim(experiment, owned_claim)
-            except ClaimError as error:
-                # A leaked claim needs an operator, but it must not rewrite the
-                # recorded result or mask the failure that is already in flight.
-                _notify_progress(
-                    progress,
-                    replace(
-                        _progress_event("warning", experiment, stream_output),
-                        error=f"Could not release claim: {error}",
-                    ),
-                )
+            _release_execution_claim(experiment, owned_claim, stream_output=stream_output, progress=progress)
+
+
+def _release_execution_claim(experiment, claim, *, stream_output, progress) -> None:
+    """Report a leaked claim without masking its outcome or stopping the queue."""
+    try:
+        release_claim(experiment, claim)
+    except ClaimError as error:
+        _notify_progress(
+            progress,
+            replace(
+                _progress_event("warning", experiment, stream_output),
+                error=f"Could not release claim: {error}",
+            ),
+        )
 
 
 def run_worker(
@@ -133,94 +171,239 @@ def run_worker(
     stream_output: bool = False,
     progress: Callable[[WorkerProgressEvent], None] | None = None,
 ) -> WorkerResult:
-    """Execute one finite discovery snapshot through the existing executor."""
-    if isinstance(max_tasks, bool) or (max_tasks is not None and (not isinstance(max_tasks, int) or max_tasks <= 0)):
+    """Consume path-ordered queues, discovering again only when each is exhausted."""
+    return execute_paths(BatchRequest((root,), max_tasks, stream_output, require_each=False), progress=progress)
+
+
+def execute_paths(
+    request: BatchRequest,
+    *,
+    progress: Callable[[WorkerProgressEvent], None] | None = None,
+) -> WorkerResult:
+    """Run a finite union of experiment leaves with a single completion budget."""
+    limit = request.max_tasks
+    if isinstance(limit, bool) or (limit is not None and (not isinstance(limit, int) or limit <= 0)):
         raise WorkerError("max_tasks must be a positive integer or None")
-    discovery = discover_experiments(root)
-    candidates = tuple(
-        experiment for experiment in discovery.experiments if experiment.status.state in {"created", "init"}
-    )
-    completed = 0
-    failed = 0
-    not_runnable = len(discovery.experiments) - len(candidates)
-    claim_contended = 0
-    stale_skipped = 0
-    task_total = len(candidates)
-    attempted = 0
-    scanned = 0
-    for task_index, discovered in enumerate(candidates, start=1):
-        if max_tasks is not None and completed >= max_tasks:
-            break
-        scanned = task_index
-        experiment = ExperimentDirectory.resolve(discovered.path)
+    initial = discover_paths(request.paths, require_each=request.require_each)
+    if request.force:
+        experiments = {item.path for item in initial.experiments}
+        if not request.retry or any(Path(path).expanduser().resolve() not in experiments for path in request.paths):
+            raise WorkerError("Forced retry requires explicit experiment-directory paths, not report roots")
+    return _BatchExecution(request, initial, progress).run()
+
+
+class _BatchExecution:
+    """Keep invocation-wide counts while allowing new work on queue refill."""
+
+    def __init__(self, request: BatchRequest, initial: DiscoveryResult, progress):
+        self.request = request
+        self.initial = initial
+        self.progress = progress
+        leaves = {item.path for item in initial.experiments}
+        paths = (Path(path).expanduser().resolve() for path in request.paths or (Path("."),))
+        self.refill_paths = tuple(path for path in paths if path not in leaves)
+        self.observed: dict[Path, DiscoveredExperiment] = {}
+        self.visited: set[Path] = set()
+        self.candidates: set[Path] = set()
+        self.non_runnable: set[Path] = set()
+        self.held: set[Path] = set()
+        self.invalid: set[tuple[Path, str]] = set()
+        self.invalid_paths: set[Path] = set()
+        self.counts: Counter[str] = Counter()
+
+    def _eligible(self, item: DiscoveredExperiment) -> bool:
+        if self.request.retry:
+            return is_retryable_state(item.status.state, force=self.request.force)
+        return item.status.state in {"created", "init"}
+
+    def _queue(self, discovery: DiscoveryResult) -> tuple[DiscoveredExperiment, ...]:
+        for diagnostic in discovery.diagnostics:
+            key = (diagnostic.path, diagnostic.message)
+            if key not in self.invalid:
+                layout = ExperimentDirectory.resolve(diagnostic.path)
+                _notify_progress(
+                    self.progress,
+                    replace(
+                        _progress_event("warning", layout, self.request.stream_output),
+                        error=diagnostic.message,
+                    ),
+                )
+                self.invalid.add(key)
+            self.invalid_paths.add(diagnostic.path)
+        queue = []
+        for item in discovery.experiments:
+            if item.path not in self.observed and not self._eligible(item):
+                self.non_runnable.add(item.path)
+            self.observed[item.path] = item
+            if not self._eligible(item):
+                continue
+            self.candidates.add(item.path)
+            if item.held:
+                self.held.add(item.path)
+            else:
+                self.held.discard(item.path)
+                if item.path not in self.visited:
+                    queue.append(item)
+        return tuple(queue)
+
+    def _quota_reached(self) -> bool:
+        limit = self.request.max_tasks
+        return limit is not None and self.counts["completed"] >= limit
+
+    def run(self) -> WorkerResult:
+        queue = self._queue(self.initial)
+        while queue and not self._quota_reached():
+            for item in queue:
+                if self._quota_reached():
+                    break
+                self._process(item)
+            if self._quota_reached() or not self.refill_paths:
+                break
+            try:
+                queue = self._queue(discover_paths(self.refill_paths))
+            except DiscoveryError as error:
+                self.counts["discovery_errors"] += 1
+                _notify_progress(
+                    self.progress,
+                    replace(
+                        _progress_event("warning", ExperimentDirectory(self.initial.root), self.request.stream_output),
+                        error=f"Could not refill queue: {error}",
+                    ),
+                )
+                break
+        deferred = sum(
+            self._eligible(item) and not item.held and item.path not in self.visited for item in self.observed.values()
+        )
+        return WorkerResult(
+            root=self.initial.root,
+            candidates=len(self.candidates),
+            selected=self.counts["completed"] + self.counts["failed"],
+            completed=self.counts["completed"],
+            failed=self.counts["failed"],
+            not_runnable=len(self.non_runnable),
+            claim_contended=self.counts["claim_contended"],
+            stale_skipped=self.counts["stale"],
+            deferred=deferred,
+            invalid=len(self.invalid_paths) + self.counts["discovery_errors"],
+            held=len(self.held),
+        )
+
+    def _process(self, item: DiscoveredExperiment) -> None:
+        self.visited.add(item.path)
 
         def task_progress(event: WorkerProgressEvent) -> None:
             _notify_progress(
-                progress,
-                replace(event, task_index=task_index, task_total=task_total),
+                self.progress, replace(event, task_index=len(self.visited), task_total=len(self.candidates))
             )
 
         outcome = _process_worker_candidate(
-            experiment,
-            stream_output=stream_output,
+            ExperimentDirectory.resolve(item.path),
+            self.request,
             progress=task_progress,
         )
-        if outcome == "claim_contended":
-            claim_contended += 1
-        elif outcome == "stale":
-            stale_skipped += 1
+        if outcome == "held":
+            self.visited.discard(item.path)
+            self.held.add(item.path)
+        elif outcome == "invalid":
+            self.invalid_paths.add(item.path)
         else:
-            attempted += 1
-            if outcome == "completed":
-                completed += 1
-            else:
-                failed += 1
-    return WorkerResult(
-        root=discovery.root,
-        candidates=len(candidates),
-        selected=attempted,
-        completed=completed,
-        failed=failed,
-        not_runnable=not_runnable,
-        claim_contended=claim_contended,
-        stale_skipped=stale_skipped,
-        deferred=len(candidates) - scanned,
-        invalid=len(discovery.diagnostics),
-    )
+            self.counts[outcome] += 1
 
 
 def _process_worker_candidate(
     experiment: ExperimentDirectory,
+    request: BatchRequest,
     *,
-    stream_output: bool,
     progress: Callable[[WorkerProgressEvent], None] | None,
-) -> Literal["completed", "failed", "claim_contended", "stale"]:
-    """Claim and process one candidate, returning its quota outcome."""
+) -> Literal["completed", "failed", "claim_contended", "stale", "held", "invalid"]:
+    """Acquire ownership before retry preparation and execution-boundary rereads."""
     try:
-        claim = try_acquire_claim(experiment)
-    except ClaimError as error:
+        if request.retry:
+            claim, overridden = acquire_retry_claim(experiment, force=request.force)
+        else:
+            claim, overridden = try_acquire_claim(experiment), False
+    except (ClaimError, RetryError, ValueError) as error:
+        return _claim_failure_outcome(experiment, request, progress, error)
+    if claim is None:
+        _report_retry_contention(experiment, request, progress)
+        return "claim_contended"
+    execution_progress = _ExecutionProgress(progress)
+    try:
+        if request.retry:
+            if is_held(experiment):
+                raise ExperimentHeldError(f"Experiment is held: {experiment.root}")
+            _prepare_candidate_retry(experiment, claim, request, progress, overridden)
+        transferred_claim, claim = claim, None
+        exit_code = run_experiment(
+            experiment.root,
+            stream_output=request.stream_output,
+            progress=execution_progress,
+            claim=transferred_claim,
+        )
+    except ExperimentHeldError:
+        return "held"
+    except ExperimentNotRunnableError:
+        return "stale"
+    except (WorkerError, RetryError, ValueError, OSError) as error:
+        return _execution_error_outcome(experiment, request, progress, error, execution_progress.failed)
+    finally:
+        if claim is not None:
+            _release_execution_claim(experiment, claim, stream_output=request.stream_output, progress=progress)
+    return "completed" if exit_code == 0 else "failed"
+
+
+def _execution_error_outcome(experiment, request, progress, error, reported_failure):
+    if not reported_failure:
         _notify_progress(
             progress,
             replace(
-                _progress_event("warning", experiment, stream_output),
-                error=f"Could not acquire claim: {error}",
+                _progress_event("warning", experiment, request.stream_output),
+                error=str(error),
             ),
         )
-        return "failed"
-    if claim is None:
-        return "claim_contended"
-    try:
-        exit_code = run_experiment(
-            experiment.root,
-            stream_output=stream_output,
-            progress=progress,
-            claim=claim,
+    # Retry archival/preparation failures never started an execution attempt.
+    return "invalid" if isinstance(error, (SchedulingError, RetryError)) else "failed"
+
+
+def _report_retry_contention(experiment, request, progress) -> None:
+    """Guide an explicitly named retry without changing batch skip semantics."""
+    if request.retry and experiment.root in {Path(path).expanduser().resolve() for path in request.paths}:
+        _notify_progress(
+            progress,
+            replace(
+                _progress_event("warning", experiment, request.stream_output),
+                error=(
+                    f"Experiment is already claimed ({describe_claim_holder(experiment)}); "
+                    "use retry --force only after independently confirming its worker and child processes stopped"
+                ),
+            ),
         )
-    except ExperimentNotRunnableError:
+
+
+def _claim_failure_outcome(experiment, request, progress, error):
+    if isinstance(error, ExperimentNotRunnableError):
         return "stale"
-    except WorkerError:
-        return "failed"
-    return "completed" if exit_code == 0 else "failed"
+    _notify_progress(
+        progress,
+        replace(
+            _progress_event("warning", experiment, request.stream_output),
+            error=f"Could not acquire claim: {error}",
+        ),
+    )
+    # Ownership was never acquired, so no execution attempt failed.
+    return "invalid"
+
+
+def _prepare_candidate_retry(experiment, claim, request, progress, overridden) -> None:
+    preparation = prepare_retry(experiment.root, force=request.force, claim=claim)
+    if preparation.forced or overridden:
+        _notify_progress(
+            progress,
+            replace(
+                _progress_event("warning", experiment, request.stream_output),
+                error="Forced retry cannot prove that the previous worker has stopped",
+            ),
+        )
 
 
 def _run_claimed_experiment(
@@ -348,7 +531,12 @@ def _run_in_working_directory(
     )
     _notify_progress(
         options.progress,
-        _progress_event("executing", experiment, options.stream_output, command=configuration.command),
+        replace(
+            _progress_event("executing", experiment, options.stream_output, command=configuration.command),
+            environment_keys=tuple(sorted(configuration.environment)),
+            artifact_directory=experiment.artifacts,
+            attempt=active_status.attempt,
+        ),
     )
     try:
         exit_code = run_command(experiment, working_directory, configuration, stream_output=options.stream_output)

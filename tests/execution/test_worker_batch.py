@@ -19,6 +19,7 @@ from tests.support import create_git_repository
 
 EXPECTED_TASKS = 2
 THREE_CANDIDATES = 3
+CLI_ERROR_EXIT = 2
 
 
 def _plan(tmp_path: Path, name: str, script: str):
@@ -226,7 +227,10 @@ def test_worker_reports_claim_error_through_progress_and_continues(tmp_path, mon
     result = run_worker(tmp_path / "reports", progress=events.append)
 
     assert result.completed == 1
-    assert result.failed == 1
+    assert result.failed == 0
+    assert result.selected == 1
+    assert result.invalid == 1
+    assert result.exit_code == CLI_ERROR_EXIT
     assert result.skipped == 0
     assert capsys.readouterr().err == ""
     warning = next(event for event in events if event.phase == "warning")

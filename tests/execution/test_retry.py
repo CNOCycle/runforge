@@ -9,6 +9,7 @@ import pytest
 
 import runforge.execution.retry as retry_module
 import runforge.infrastructure.storage as experiment_storage
+from runforge.execution.errors import ExperimentNotRunnableError
 from runforge.execution.retry import RetryError, prepare_retry
 from runforge.execution.worker import run_experiment
 from runforge.infrastructure.claims import try_acquire_claim
@@ -206,6 +207,9 @@ def test_prepare_retry_rejects_ineligible_states_without_changes(tmp_path, state
 
     with pytest.raises(RetryError, match=message):
         prepare_retry(experiment, force=True)
+
+    with pytest.raises(ExperimentNotRunnableError, match=message):
+        retry_module.acquire_retry_claim(experiment_storage.ExperimentDirectory.resolve(experiment), force=True)
 
     assert _status(experiment) == original
     assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "keep"

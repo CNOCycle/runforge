@@ -43,7 +43,7 @@ class DiscoveryResult:
     diagnostics: tuple[DiscoveryDiagnostic, ...]
 
 
-def discover_experiments(root: Path = Path(".")) -> DiscoveryResult:
+def discover_experiments(root: Path = Path("."), *, read_scheduling: bool = True) -> DiscoveryResult:
     """Recursively discover valid experiments below root without mutation."""
     discovery_root = _resolve_root(root)
     candidates: list[Path] = []
@@ -78,7 +78,7 @@ def discover_experiments(root: Path = Path(".")) -> DiscoveryResult:
 
     experiments: list[DiscoveredExperiment] = []
     for candidate in sorted(candidates):
-        experiment, diagnostic = _load_candidate(candidate)
+        experiment, diagnostic = _load_candidate(candidate, read_scheduling=read_scheduling)
         if experiment is not None:
             experiments.append(experiment)
         if diagnostic is not None:
@@ -109,6 +109,8 @@ def _resolve_root(root: Path) -> Path:
 
 def _load_candidate(
     candidate: Path,
+    *,
+    read_scheduling: bool,
 ) -> tuple[DiscoveredExperiment | None, DiscoveryDiagnostic | None]:
     layout = ExperimentDirectory(candidate)
     if not layout.configuration_file.is_file():
@@ -117,7 +119,7 @@ def _load_candidate(
         return None, DiscoveryDiagnostic(candidate, f"missing {STATUS_FILE}")
     try:
         configuration, status = layout.load_metadata()
-        held = is_held(layout)
+        held = is_held(layout) if read_scheduling else False
     except (ValueError, SchedulingError) as error:
         return None, DiscoveryDiagnostic(candidate, str(error))
     return DiscoveredExperiment(candidate, configuration, status, held), None
@@ -140,3 +142,28 @@ def _inspect_experiment_boundary(path: Path, names: set[str]) -> tuple[bool, tup
         if kind in {"runforge_experiment_configuration", "runforge_experiment_status"}:
             return True, ()
     return False, tuple(diagnostics)
+
+
+def discover_paths(
+    paths: tuple[Path, ...], *, require_each: bool = False, read_scheduling: bool = True
+) -> DiscoveryResult:
+    """Union explicit report roots/experiment leaves by resolved path."""
+    if not paths:
+        paths = (Path("."),)
+    experiments: dict[Path, DiscoveredExperiment] = {}
+    diagnostics: dict[tuple[Path, str], DiscoveryDiagnostic] = {}
+    first_root: Path | None = None
+    for path in paths:
+        result = discover_experiments(path, read_scheduling=read_scheduling)
+        if first_root is None:
+            first_root = result.root
+        if require_each and not result.experiments and not result.diagnostics:
+            raise DiscoveryError(f"No experiments found under: {result.root}")
+        experiments.update((item.path, item) for item in result.experiments)
+        diagnostics.update(((item.path, item.message), item) for item in result.diagnostics)
+    assert first_root is not None
+    return DiscoveryResult(
+        first_root,
+        tuple(experiments[path] for path in sorted(experiments)),
+        tuple(diagnostics[key] for key in sorted(diagnostics)),
+    )
