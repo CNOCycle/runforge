@@ -21,9 +21,9 @@ from runforge.schemas.worker_manifest import WorkerManifest, WorkerManifestError
 
 
 def default_workspace_root() -> Path:
-    """Resolve the root worker-cleanup scans when the operator gives none explicitly.
+    """Resolve the workspace scan root when the operator gives none explicitly.
 
-    Reuses the same RUNFORGE_WORKER_ROOT resolution the worker itself uses,
+    Reuses the same RUNFORGE_WORKSPACE_ROOT resolution the worker itself uses,
     so cleanup scans the one place workspaces actually land when it is
     configured, and falls back to the current directory otherwise -- an
     explicit root argument always overrides this.

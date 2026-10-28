@@ -60,7 +60,7 @@ def test_cli_plans_and_runs_a_verified_directory_experiment(tmp_path, capsys):
 
     assert main(["run", str(experiment)]) == 0
     run_output = capsys.readouterr().out
-    assert f"Experiment completed with exit code 0: {experiment}" in run_output
+    assert f"Experiment completed with exit code 0 [1/1]: {experiment}" in run_output
     assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "ran"
 
 
@@ -100,7 +100,7 @@ def test_cli_plans_a_directory_snapshot_experiment_that_outlives_and_runs_after_
 
     assert main(["run", str(experiment)]) == 0
     run_output = capsys.readouterr().out
-    assert f"Experiment completed with exit code 0: {experiment}" in run_output
+    assert f"Experiment completed with exit code 0 [1/1]: {experiment}" in run_output
     assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "ran"
 
 
@@ -112,8 +112,8 @@ def test_cli_creates_a_verified_directory_matrix(tmp_path, capsys):
     assert (
         main(
             [
-                "matrix",
-                "--matrix-file",
+                "plan",
+                "--matrix",
                 str(matrix_file),
                 "--source-mode",
                 "verified-directory",

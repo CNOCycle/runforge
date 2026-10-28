@@ -32,66 +32,58 @@ def _workspace(tmp_path: Path) -> Path:
     return workspace
 
 
-def test_worker_inspect_renders_a_workspace_manifest(tmp_path, capsys):
+def test_workspace_listing_provides_identity_without_separate_inspection(tmp_path, capsys):
     workspace = _workspace(tmp_path)
 
-    assert main(["worker-inspect", str(workspace)]) == 0
+    assert main(["workspaces", str(tmp_path)]) == 0
 
     output = capsys.readouterr().out
-    assert "RunForge worker-inspect effective arguments:" in output
-    assert f"  workspace: {workspace}" in output
-    assert f"Worker workspace manifest ({workspace.name}):" in output
-    assert "  source kind: git" in output
-    assert "  source identity: /repositories/repo_A" in output
-    assert f"  source reference: {'a' * 40}" in output
-    assert "  host: node7" in output
-    assert "  pid: 4127" in output
-    assert "  owner: node7:4127" in output
-    assert "  worker id: t" in output
-    assert "  started at: 2026-07-30T18:15:30.000000Z" in output
+    for text in (
+        workspace.name,
+        "/repositories/repo_A",
+        "a" * 40,
+        "host: node7",
+        "pid: 4127",
+        "owner: node7:4127",
+        "2026-07-30T18:15:30.000000Z",
+        "process activity is not verified",
+    ):
+        assert text in output
 
 
-def test_worker_inspect_leaves_the_manifest_untouched(tmp_path):
+def test_workspace_listing_leaves_manifest_untouched(tmp_path):
     workspace = _workspace(tmp_path)
     before = (workspace / WORKER_MANIFEST_FILE).read_bytes()
 
-    assert main(["worker-inspect", str(workspace)]) == 0
+    assert main(["workspaces", str(tmp_path)]) == 0
 
+    assert workspace.exists()
     assert (workspace / WORKER_MANIFEST_FILE).read_bytes() == before
 
 
-def test_worker_inspect_rejects_a_workspace_with_no_manifest(tmp_path, capsys):
+def test_workspace_listing_reports_unknown_identity_without_removing_it(tmp_path, capsys):
     workspace = tmp_path / "runforge-worker-no-manifest"
     workspace.mkdir()
 
-    assert main(["worker-inspect", str(workspace)]) == CLI_ERROR_EXIT
+    assert main(["workspaces", str(tmp_path)]) == 0
 
-    assert "Could not read JSON object" in capsys.readouterr().err
+    assert "manifest unavailable" in capsys.readouterr().out
+    assert workspace.exists()
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("kind", "something_else"),
-        ("schema_version", 2),
-    ],
-)
-def test_worker_inspect_rejects_an_unsupported_manifest(tmp_path, capsys, field, value):
+@pytest.mark.parametrize(("field", "value"), [("kind", "something_else"), ("schema_version", 2)])
+def test_workspace_listing_reports_unsupported_manifest(tmp_path, capsys, field, value):
     workspace = _workspace(tmp_path)
     payload = load_json_object(workspace / WORKER_MANIFEST_FILE)
     payload[field] = value
     save_json_object(workspace / WORKER_MANIFEST_FILE, payload)
 
-    assert main(["worker-inspect", str(workspace)]) == CLI_ERROR_EXIT
+    assert main(["workspaces", str(tmp_path)]) == 0
 
-    assert "Unsupported worker workspace manifest" in capsys.readouterr().err
+    assert "Unsupported worker workspace manifest" in capsys.readouterr().out
+    assert workspace.exists()
 
 
-def test_worker_inspect_rejects_a_manifest_missing_fields(tmp_path, capsys):
-    workspace = tmp_path / "runforge-worker-incomplete-manifest"
-    workspace.mkdir()
-    save_json_object(workspace / WORKER_MANIFEST_FILE, {"kind": "runforge_worker_manifest", "schema_version": 1})
-
-    assert main(["worker-inspect", str(workspace)]) == CLI_ERROR_EXIT
-
-    assert "Missing worker workspace manifest field(s)" in capsys.readouterr().err
+def test_workspace_listing_missing_root_is_an_error(tmp_path, capsys):
+    assert main(["workspaces", str(tmp_path / "missing")]) == CLI_ERROR_EXIT
+    assert "does not exist" in capsys.readouterr().err

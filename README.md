@@ -1,5 +1,11 @@
 # RunForge
 
+This checkout implements candidate F. Priority controls are deferred.
+Use runforge run to process a report root with lazy queue refill, and
+runforge schedule --hold / runforge schedule --release to control pending work.
+The complete canonical interface and exit behavior are in the
+[CLI reference](docs/reference/cli.md).
+
 **RunForge** is a small experiment runner for turning a source checkout, command,
 environment overrides, and output directory into a durable run record. It is
 designed for the common research problem where an experiment is planned on one
@@ -110,8 +116,9 @@ recorded repository:
 runforge run "$REPO/reports/main/01234567_baseline_0000"
 ```
 
-The worker returns the planned command's exit code. A non-zero command exit
-marks the experiment as failed but still leaves logs and metadata intact.
+Execution returns 0 for no selected failure, 1 for command failure, or 2 for
+CLI/discovery errors. The child's exact exit code remains in status.json and
+logs. Successful skips do not assert that a target completed.
 
 To create the plan and run it immediately in the foreground, use `launch` with
 the same options accepted by `plan`:
@@ -124,8 +131,8 @@ runforge launch \
   -- python train.py --output '{ARTIFACT_DIR}'
 ```
 
-`launch` prints the created experiment directory before execution and returns
-the training command's exit code. The standalone `plan` and `run` commands
+`launch` prints the created experiment directory before execution and uses the
+same aggregate 0/1/2 result as run and retry. The standalone `plan` and `run` commands
 remain available when planning and execution need to happen at different times
 or on different machines.
 
@@ -144,7 +151,7 @@ runforge run --stream-output "$REPO/reports/main/01234567_baseline_0000"
 
 RunForge forwards output as the command emits it. Programs that buffer their
 own output must flush it or enable their own unbuffered mode for timely display.
-Regardless of streaming mode, `run`, `launch`, `retry`, and `worker` print
+Regardless of streaming mode, `run`, `launch`, and `retry` print
 flushed preparation, execution, and final success or failure messages so
 a quiet child process is distinguishable from a stalled CLI. In log-only mode,
 the lifecycle messages also identify the active `stdout.log` and `stderr.log`
@@ -179,11 +186,11 @@ Expand one source and command template into an independent experiment directory
 per parameter combination:
 
 ```bash
-runforge matrix --name sweep --matrix-file matrix.json --out-dir "$REPORT_ROOT" --source-path "$REPO" -- python train.py --lr '{LR}' --output '{ARTIFACT_DIR}'
+runforge plan --name sweep --matrix matrix.json --out-dir "$REPORT_ROOT" --source-path "$REPO" -- python train.py --lr '{LR}' --output '{ARTIFACT_DIR}'
 ```
 
 Planning prints a table relating each directory to its parameters and saves it
-beside them as a JSON artifact, which `runforge matrix-show PATH` renders later.
+beside them as a JSON artifact, which `runforge mapping PATH` renders later.
 See [Matrices and mapping](docs/guides/matrices-and-mapping.md).
 
 ## Non-Git Directory Sources
@@ -211,11 +218,11 @@ See [Workers and recovery](docs/guides/workers-and-recovery.md).
 
 ## Run Multiple Experiments With A Worker
 
-Consume one snapshot of runnable plans, claiming each atomically so several
-workers can share a report root:
+Consume runnable plans in path order and refill discovery when the queue is
+exhausted. Claims let several workers share a report root; an empty refill exits:
 
 ```bash
-runforge worker "$REPORT_ROOT"
+runforge run "$REPORT_ROOT"
 ```
 
 See [Workers and recovery](docs/guides/workers-and-recovery.md) for the summary

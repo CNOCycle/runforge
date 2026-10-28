@@ -31,7 +31,7 @@ process is planning into the same root.
 `worker` consumes one finite snapshot of runnable plans:
 
 ```bash
-runforge worker "$REPORT_ROOT"
+runforge run "$REPORT_ROOT"
 ```
 
 It scans `created` and `init` plans in deterministic path order, atomically
@@ -50,7 +50,7 @@ planned into, run `worker` again when planning finishes.
 Bound a temporary node with `--max-tasks`:
 
 ```bash
-runforge worker "$REPORT_ROOT" --max-tasks 2
+runforge run "$REPORT_ROOT" --max-tasks 2
 ```
 
 `N` must be positive. It means “complete `N` tasks,” not “inspect only `N`
@@ -105,12 +105,12 @@ Recovery is therefore explicit and operator-confirmed.
 
 The previous section describes what RunForge won't do automatically; this is
 how you find a candidate for the manual recovery below, instead of already
-having to know one exists. Add `--older-than` or `--updated-before` to
+having to know one exists. Add `--older-than` or `--started-before` to
 `discover` to flag `inprogress` experiments that started a while ago:
 
 ```bash
 runforge discover "$REPORT_ROOT" --older-than 6h
-runforge discover "$REPORT_ROOT" --updated-before 2026-08-01T00:00:00Z
+runforge discover "$REPORT_ROOT" --started-before 2026-08-01T00:00:00Z
 ```
 
 Both are opt-in and purely a hint — nothing is retried, no claim is touched,

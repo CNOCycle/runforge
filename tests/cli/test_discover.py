@@ -84,11 +84,11 @@ def test_discover_cli_lists_experiments_and_state_totals(tmp_path, capsys):
     assert captured.err == ""
     assert captured.out.splitlines() == [
         "RunForge discover effective arguments:",
-        f"  root: {root.resolve()}",
+        f"  paths: {root.resolve()}",
         "  stale cutoff: not set",
         f"Experiments discovered under: {root.resolve()}",
-        f"created | attempt=0 | name=new run | source=main@aaaaaaaa | path={first.resolve()}",
-        f"completed | attempt=1 | name=finished run | source=main@aaaaaaaa | path={second.resolve()}",
+        f"created | attempt=0 | name=new run | source=main@aaaaaaaa | held=false | path={first.resolve()}",
+        f"completed | attempt=1 | name=finished run | source=main@aaaaaaaa | held=false | path={second.resolve()}",
         "Summary:",
         "  created: 1",
         "  init: 0",
@@ -110,7 +110,7 @@ def test_discover_cli_reports_an_empty_default_root(tmp_path, monkeypatch, capsy
     assert captured.err == ""
     assert captured.out.splitlines() == [
         "RunForge discover effective arguments:",
-        f"  root: {root.resolve()}",
+        f"  paths: {root.resolve()}",
         "  stale cutoff: not set",
         f"Experiments discovered under: {root.resolve()}",
         "No experiments found.",
@@ -135,7 +135,9 @@ def test_discover_cli_lists_valid_plans_and_reports_invalid_candidates(tmp_path,
     assert main(["discover", str(root)]) == CLI_ERROR_EXIT
 
     captured = capsys.readouterr()
-    assert f"created | attempt=0 | name=valid | source=main@aaaaaaaa | path={valid.resolve()}" in captured.out
+    assert (
+        f"created | attempt=0 | name=valid | source=main@aaaaaaaa | held=false | path={valid.resolve()}" in captured.out
+    )
     assert "  invalid: 1" in captured.out
     assert captured.err == f"invalid | path={invalid.resolve()} | error=missing status.json\n"
 
@@ -146,13 +148,13 @@ def test_discover_cli_rejects_a_missing_root(tmp_path, capsys):
     assert main(["discover", str(root)]) == CLI_ERROR_EXIT
 
     captured = capsys.readouterr()
-    assert f"  root: {root.resolve()}" in captured.out
+    assert f"  paths: {root.resolve()}" in captured.out
     assert "error: Discovery root" in captured.err
 
 
 def test_discover_cli_rejects_both_older_than_and_updated_before(capsys):
     with pytest.raises(SystemExit) as raised:
-        main(["discover", "--older-than", "6h", "--updated-before", "2026-08-01T00:00:00Z"])
+        main(["discover", "--older-than", "6h", "--started-before", "2026-08-01T00:00:00Z"])
 
     assert raised.value.code == CLI_ERROR_EXIT
     assert "not allowed with argument" in capsys.readouterr().err
@@ -168,7 +170,7 @@ def test_discover_cli_rejects_a_malformed_duration(capsys):
 
 def test_discover_cli_rejects_a_malformed_timestamp(capsys):
     with pytest.raises(SystemExit) as raised:
-        main(["discover", "--updated-before", "not-a-timestamp"])
+        main(["discover", "--started-before", "not-a-timestamp"])
 
     assert raised.value.code == CLI_ERROR_EXIT
     assert "must be a UTC ISO 8601 timestamp" in capsys.readouterr().err
@@ -211,7 +213,7 @@ def test_discover_cli_with_updated_before_uses_an_explicit_cutoff(tmp_path, caps
     stale = root / "stale"
     _experiment(stale, name="stale-run", state="inprogress", started_at="2020-01-01T00:00:00.000000Z")
 
-    assert main(["discover", str(root), "--updated-before", "2026-01-01T00:00:00Z"]) == 0
+    assert main(["discover", str(root), "--started-before", "2026-01-01T00:00:00Z"]) == 0
 
     output = capsys.readouterr().out
     assert "  stale: 1" in output

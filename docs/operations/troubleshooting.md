@@ -77,7 +77,7 @@ For the full, untruncated identity — including who claimed the experiment
 that built it — read the workspace's manifest:
 
 ```bash
-runforge worker-inspect PATH
+runforge workspaces PATH
 ```
 
 This is read-only and safe to run on a live workspace; it only reports what
@@ -89,19 +89,19 @@ paths to remove — nothing is ever selected automatically, and in particular
 never by age:
 
 ```bash
-runforge worker-cleanup ROOT
-runforge worker-cleanup ROOT --confirm PATH
+runforge workspaces ROOT
+runforge workspaces ROOT --remove PATH
 ```
 
 The first form only lists; it changes nothing. The second removes exactly
-the paths passed to `--confirm`, which must be among the ones just listed —
+the paths passed to `--remove`, which must be among the ones just listed —
 a typo'd or unrelated path is rejected rather than silently ignored. A
 Git-sourced workspace is deregistered as a worktree (`git worktree remove`
 under the hood), not just deleted, so the repository's own worktree list
 stays accurate; a non-Git workspace is a plain materialized copy with no
 registration to clean up.
 
-Set `RUNFORGE_WORKER_ROOT` (see [the CLI reference](../reference/cli.md) and
+Set `RUNFORGE_WORKSPACE_ROOT` (see [the CLI reference](../reference/cli.md) and
 [Shared filesystems](shared-filesystems.md)) so `worker-cleanup` (and
 `ROOT` above) has one place to scan, instead of searching beside each
 repository and the host's temporary directory separately.

@@ -5,33 +5,27 @@ from __future__ import annotations
 import argparse
 import sys
 import warnings
-from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
 from runforge.cli.output import (
     path_text,
-    print_discover_arguments,
     print_discovered_workspaces,
     print_discovery,
+    print_effective_arguments,
     print_matrix_mapping,
     print_matrix_mapping_file,
     print_matrix_show_arguments,
     print_planning_arguments,
     print_removed_workspace,
-    print_retry_arguments,
-    print_run_arguments,
-    print_worker_arguments,
     print_worker_cleanup_arguments,
-    print_worker_inspect_arguments,
-    print_worker_manifest_file,
     print_worker_progress,
     print_worker_summary,
 )
 from runforge.cli.requests import matrix_request, planning_request
-from runforge.execution.discovery import discover_experiments
-from runforge.execution.retry import prepare_retry
-from runforge.execution.worker import WorkerError, run_experiment, run_worker
+from runforge.execution.discovery import discover_paths
+from runforge.execution.scheduling import SchedulingError, set_hold
+from runforge.execution.worker import BatchRequest, WorkerError, execute_paths
 from runforge.execution.workspace_cleanup import (
     default_workspace_root,
     discover_workspaces,
@@ -41,16 +35,31 @@ from runforge.planning.matrix_mapping import build_matrix_mapping, save_matrix_m
 from runforge.planning.planner import MatrixPlanRequest, PlanRequest, plan_experiment, plan_matrix
 
 
-def _run_run_command(arguments: argparse.Namespace) -> int:
-    print_run_arguments(arguments)
-    return run_experiment(
-        arguments.experiment,
-        stream_output=arguments.stream_output,
+def run(arguments: argparse.Namespace) -> int:
+    rows = [
+        ("paths", ", ".join(path_text(path) for path in arguments.paths)),
+        ("stream output", "enabled" if arguments.stream_output else "disabled"),
+    ]
+    if arguments.retry:
+        rows.append(("force", "enabled" if arguments.force else "disabled"))
+    else:
+        rows.append(("max tasks", str(arguments.max_tasks) if arguments.max_tasks else "unlimited"))
+    print_effective_arguments(arguments.command_name, rows)
+    result = execute_paths(
+        BatchRequest(
+            tuple(arguments.paths),
+            arguments.max_tasks,
+            arguments.stream_output,
+            retry=arguments.retry,
+            force=arguments.force,
+        ),
         progress=print_worker_progress,
     )
+    print_worker_summary(result, label="Execution")
+    return result.exit_code
 
 
-def _run_matrix_command(arguments: argparse.Namespace) -> int:
+def matrix(arguments: argparse.Namespace) -> int:
     request = matrix_request(arguments)
     print_planning_arguments(
         arguments,
@@ -74,19 +83,13 @@ def _run_matrix_command(arguments: argparse.Namespace) -> int:
     return 0
 
 
-def _run_matrix_show_command(arguments: argparse.Namespace) -> int:
+def matrix_show(arguments: argparse.Namespace) -> int:
     print_matrix_show_arguments(arguments)
     print_matrix_mapping_file(arguments.artifact)
     return 0
 
 
-def _run_worker_inspect_command(arguments: argparse.Namespace) -> int:
-    print_worker_inspect_arguments(arguments)
-    print_worker_manifest_file(arguments.workspace)
-    return 0
-
-
-def _run_worker_cleanup_command(arguments: argparse.Namespace) -> int:
+def workspace_cleanup(arguments: argparse.Namespace) -> int:
     root = arguments.root if arguments.root is not None else default_workspace_root()
     print_worker_cleanup_arguments(arguments, root)
     discovered = discover_workspaces(root)
@@ -98,7 +101,7 @@ def _run_worker_cleanup_command(arguments: argparse.Namespace) -> int:
     unknown = tuple(path for path in requested if path not in discovered_paths)
     if unknown:
         raise WorkerError(
-            "--confirm named a path that discovery did not find: " + ", ".join(str(path) for path in unknown)
+            "--remove named a path that discovery did not find: " + ", ".join(str(path) for path in unknown)
         )
     for path in requested:
         remove_workspace(path)
@@ -106,41 +109,32 @@ def _run_worker_cleanup_command(arguments: argparse.Namespace) -> int:
     return 0
 
 
-def _run_plan_command(arguments: argparse.Namespace) -> int:
+def plan(arguments: argparse.Namespace) -> int:
+    if arguments.matrix_file is not None:
+        return matrix(arguments)
     request = planning_request(arguments)
     print_planning_arguments(arguments, request)
     experiment = _plan_with_warnings(request)
     print(f"Experiment plan created at: {experiment}", flush=True)
-    if arguments.subcommand != "launch":
+    if not arguments.execute_after_plan:
         return 0
-    return run_experiment(
-        experiment,
-        stream_output=arguments.stream_output,
-        progress=print_worker_progress,
+    result = execute_paths(
+        BatchRequest((experiment,), stream_output=arguments.stream_output), progress=print_worker_progress
     )
+    print_worker_summary(result, label="Execution")
+    return result.exit_code
 
 
-def _run_retry_command(arguments: argparse.Namespace) -> int:
-    print_retry_arguments(arguments)
-    preparation = prepare_retry(arguments.experiment, force=arguments.force)
-    if preparation.forced:
-        print(
-            "warning: Forced retry cannot prove that the previous worker has stopped",
-            file=sys.stderr,
-            flush=True,
-        )
-    print(f"Previous attempt archived at: {preparation.archive}", flush=True)
-    return run_experiment(
-        preparation.experiment,
-        stream_output=arguments.stream_output,
-        progress=print_worker_progress,
-    )
-
-
-def _run_discover_command(arguments: argparse.Namespace) -> int:
+def discover(arguments: argparse.Namespace) -> int:
     cutoff = _resolve_stale_cutoff(arguments)
-    print_discover_arguments(arguments, stale_cutoff=cutoff)
-    result = discover_experiments(arguments.root)
+    print_effective_arguments(
+        "discover",
+        [
+            ("paths", ", ".join(path_text(path) for path in arguments.paths)),
+            ("stale cutoff", cutoff.isoformat().replace("+00:00", "Z") if cutoff else "not set"),
+        ],
+    )
+    result = discover_paths(tuple(arguments.paths))
     print_discovery(result, stale_cutoff=cutoff)
     return 2 if result.diagnostics else 0
 
@@ -151,20 +145,6 @@ def _resolve_stale_cutoff(arguments: argparse.Namespace) -> datetime | None:
     if arguments.updated_before is not None:
         return arguments.updated_before
     return None
-
-
-def _run_worker_command(arguments: argparse.Namespace) -> int:
-    print_worker_arguments(arguments)
-    result = run_worker(
-        arguments.root,
-        max_tasks=arguments.max_tasks,
-        stream_output=arguments.stream_output,
-        progress=print_worker_progress,
-    )
-    print_worker_summary(result)
-    if result.invalid:
-        return 2
-    return 1 if result.failed else 0
 
 
 def _plan_with_warnings(request: PlanRequest) -> Path:
@@ -185,15 +165,15 @@ def _plan_matrix_with_warnings(request: MatrixPlanRequest) -> tuple[Path, ...]:
     return experiments
 
 
-_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
-    "plan": _run_plan_command,
-    "launch": _run_plan_command,
-    "matrix": _run_matrix_command,
-    "matrix-show": _run_matrix_show_command,
-    "worker-inspect": _run_worker_inspect_command,
-    "worker-cleanup": _run_worker_cleanup_command,
-    "run": _run_run_command,
-    "retry": _run_retry_command,
-    "discover": _run_discover_command,
-    "worker": _run_worker_command,
-}
+def schedule(arguments: argparse.Namespace) -> int:
+    discovery = discover_paths(tuple(arguments.paths), require_each=True, read_scheduling=False)
+    errors = [f"{item.path}: {item.message}" for item in discovery.diagnostics]
+    for item in discovery.experiments:
+        try:
+            set_hold(item.path, held=arguments.held)
+            print(f"{'Held' if arguments.held else 'Released'}: {item.path}")
+        except SchedulingError as error:
+            errors.append(str(error))
+    for error in errors:
+        print(f"error: {error}", file=sys.stderr)
+    return 2 if errors else 0

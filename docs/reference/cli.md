@@ -17,7 +17,7 @@ interact, and what each exit code means.
 | `discover` | Lists a report root. Read-only. | `0`, or `2` if any metadata is invalid |
 | `worker` | Executes available plans from one report root. | See below |
 | `worker-inspect` | Renders a worker workspace's manifest. Read-only. | `0`, or `2` on a bad workspace |
-| `worker-cleanup` | Lists leftover worker workspaces; removes only those passed to `--confirm`. | `0`, or `2` on error |
+| `worker-cleanup` | Lists leftover worker workspaces; removes only those passed to `--remove`. | `0`, or `2` on error |
 
 `worker` exit codes carry more meaning than the rest:
 
@@ -84,11 +84,11 @@ only the names of loaded variables — because they may hold credentials.
 | `RUNFORGE_ARTIFACT_DIR` | Set by the worker | Where the child command should write output |
 | `RUNFORGE_INPUT_DIR` | Set by the worker | The rendered immutable input tree |
 | `RUNFORGE_CLAIM_OWNER` | Read by RunForge | Identity recorded in a claim, for recovery |
-| `RUNFORGE_WORKER_ROOT` | Read by RunForge | Parent directory for the worker's temporary Git worktree or materialized directory-snapshot workspace |
+| `RUNFORGE_WORKSPACE_ROOT` | Read by RunForge | Parent directory for the worker's temporary Git worktree or materialized directory-snapshot workspace |
 
-`RUNFORGE_CLAIM_OWNER` and `RUNFORGE_WORKER_ROOT` are the two RunForge reads.
+`RUNFORGE_CLAIM_OWNER` and `RUNFORGE_WORKSPACE_ROOT` are the two RunForge reads.
 `RUNFORGE_CLAIM_OWNER` appears in operator error messages, so it must not
-contain secrets. `RUNFORGE_WORKER_ROOT` must already exist and be writable by
+contain secrets. `RUNFORGE_WORKSPACE_ROOT` must already exist and be writable by
 the worker; RunForge does not create it, and an unusable value fails the
 experiment with a clear error rather than falling back silently. Unset or
 blank, the worker keeps its previous defaults: next to the source repository

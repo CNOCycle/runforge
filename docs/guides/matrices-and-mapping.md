@@ -23,9 +23,9 @@ example above produces four experiments.
 ## Planning A Sweep
 
 ```bash
-runforge matrix \
+runforge plan \
   --name learning-rate-sweep \
-  --matrix-file matrix.json \
+  --matrix matrix.json \
   --out-dir "$REPORT_ROOT" \
   --source-path "$REPO" \
   -- python train.py --lr '{LR}' --seed '{SEED}' --output '{ARTIFACT_DIR}'
@@ -60,7 +60,7 @@ For example, this matrix declares two learning rates:
 This command is unsafe because `--lr` is fixed:
 
 ```bash
-runforge matrix --matrix-file matrix.json -- \
+runforge plan --matrix matrix.json -- \
   python train.py --lr 0.1 --seed '{SEED}' --output '{ARTIFACT_DIR}'
 ```
 
@@ -72,7 +72,7 @@ parameters. No experiment configuration is published.
 Use the matrix placeholder to make the axis affect execution:
 
 ```bash
-runforge matrix --matrix-file matrix.json -- \
+runforge plan --matrix matrix.json -- \
   python train.py --lr '{LR}' --seed '{SEED}' --output '{ARTIFACT_DIR}'
 ```
 
@@ -146,10 +146,10 @@ reports every created directory and exits `0` with a warning on standard error.
 ## Reading The Mapping Later
 
 Results are usually reviewed after a sweep finishes rather than while it is
-planned. `matrix-show` renders a saved artifact at any later time:
+planned. `mapping` renders a saved artifact at any later time:
 
 ```bash
-runforge matrix-show "$REPORT_ROOT/main/a9f2ee3c_exp_matrix.json"
+runforge mapping "$REPORT_ROOT/main/a9f2ee3c_exp_matrix.json"
 ```
 
 It only inspects: it never plans, executes, or changes experiment state, so it
@@ -170,7 +170,7 @@ worker, which claims each one before running it so several workers can share a
 report root safely:
 
 ```bash
-runforge worker "$REPORT_ROOT"
+runforge run "$REPORT_ROOT"
 ```
 
 See [Workers and recovery](workers-and-recovery.md).

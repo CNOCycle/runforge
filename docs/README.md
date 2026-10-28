@@ -34,7 +34,7 @@ Design rationale, for changing RunForge rather than using it.
 | Page | Contents |
 | --- | --- |
 | [Architecture and workflows](architecture/architecture-and-workflows.md) | Package responsibilities and how planning and execution fit together. |
-| [Worker lifecycle and claims](architecture/worker-lifecycle-and-claims.md) | How ownership is decided, and why the worker is deliberately not a scheduler. |
+| [Worker lifecycle and claims](architecture/worker-lifecycle-and-claims.md) | Ownership, experiment boundaries, scheduling holds, and lazy queue refill. |
 
 ## Operations
 

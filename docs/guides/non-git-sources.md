@@ -126,9 +126,9 @@ shared across every combination. Snapshot plans remain self-contained even when
 that duplicates a small tree for each experiment.
 
 ```bash
-runforge matrix \
+runforge plan \
   --name ablation \
-  --matrix-file matrix.json \
+  --matrix matrix.json \
   --source-mode directory-snapshot \
   --source-path /work/my-study \
   --out-dir /work/my-study-reports \

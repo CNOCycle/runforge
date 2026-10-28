@@ -1,24 +1,32 @@
-"""Parse the CLI and invoke its command handler."""
+"""Parse the CLI and invoke an explicitly selected leaf handler."""
 
 from __future__ import annotations
 
 import sys
 from collections.abc import Sequence
 
-from runforge.cli.commands import _COMMANDS
 from runforge.cli.parser import build_parser
 from runforge.execution.discovery import DiscoveryError
+from runforge.execution.errors import WorkerError
 from runforge.execution.retry import RetryError
-from runforge.execution.worker import WorkerError
 from runforge.execution.workspace_cleanup import WorkspaceCleanupError
+from runforge.infrastructure.claims import ClaimError
 from runforge.planning.planner import PlanningError
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the RunForge CLI and return its process exit code."""
+    """Usage/domain failures return 2; leaves define their execution contract."""
     arguments = build_parser().parse_args(argv)
     try:
-        return _COMMANDS[arguments.subcommand](arguments)
-    except (DiscoveryError, PlanningError, RetryError, WorkerError, WorkspaceCleanupError, ValueError) as error:
+        return arguments.handler(arguments)
+    except (
+        ClaimError,
+        DiscoveryError,
+        PlanningError,
+        RetryError,
+        WorkerError,
+        WorkspaceCleanupError,
+        ValueError,
+    ) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

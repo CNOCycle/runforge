@@ -48,7 +48,7 @@ from runforge.schemas.worker_manifest import WORKER_MANIFEST_FILE, WorkerManifes
 
 SourceT = TypeVar("SourceT")
 
-WORKER_ROOT_VARIABLE = "RUNFORGE_WORKER_ROOT"
+WORKSPACE_ROOT_VARIABLE = "RUNFORGE_WORKSPACE_ROOT"
 
 
 def _configured_workspace_root() -> Path | None:
@@ -59,7 +59,7 @@ def _configured_workspace_root() -> Path | None:
     back to each mode's existing default (next to the Git repository, or the
     OS default temporary location) rather than being treated as configured.
     """
-    configured = os.environ.get(WORKER_ROOT_VARIABLE, "").strip()
+    configured = os.environ.get(WORKSPACE_ROOT_VARIABLE, "").strip()
     return Path(configured).expanduser().resolve() if configured else None
 
 

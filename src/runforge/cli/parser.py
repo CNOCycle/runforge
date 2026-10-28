@@ -6,9 +6,21 @@ import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from runforge.cli import commands
 from runforge.infrastructure.clock import parse_utc
 from runforge.infrastructure.duration import DurationError, parse_duration
 from runforge.version import display_version
+
+
+_WORKSPACE_HELP = (
+    "Worker workspace: set RUNFORGE_WORKSPACE_ROOT to an existing writable parent "
+    "before execution. Git defaults to a directory beside the source repository; "
+    "directory-snapshot uses the system temporary directory; verified-directory "
+    "runs in its original source directory. Example: export "
+    "RUNFORGE_WORKSPACE_ROOT=/work/runforge-workspaces. This is separate from the "
+    "report root holding saved plans, logs, and artifacts. See the README quick "
+    "start: 'Choose where workers run'."
+)
 
 
 def _positive_integer(value: str) -> int:
@@ -49,7 +61,7 @@ class SemanticDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the complete RunForge argument parser."""
+    """Build candidate F's eight explicit, flat operation selectors."""
     parser = argparse.ArgumentParser(
         prog="runforge",
         description="Plan, inspect, and run reproducible Git-backed and non-Git experiments.",
@@ -57,186 +69,118 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=SemanticDefaultsHelpFormatter,
     )
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {display_version()}")
-    subparsers = parser.add_subparsers(dest="subcommand", required=True)
-
-    plan = subparsers.add_parser(
-        "plan",
-        help="create one experiment directory without execution",
-        description="Create one Git-backed or non-Git experiment directory without executing its command.",
-        formatter_class=SemanticDefaultsHelpFormatter,
+    leaves = parser.add_subparsers(dest="subcommand", required=True)
+    for name in ("plan", "launch"):
+        leaf = leaves.add_parser(
+            name,
+            help="publish one plan" if name == "plan" else "publish and execute one plan",
+            epilog=_WORKSPACE_HELP if name == "launch" else None,
+            formatter_class=SemanticDefaultsHelpFormatter,
+        )
+        _add_planning_arguments(leaf)
+        leaf.set_defaults(
+            handler=commands.plan, command_name=name, execute_after_plan=name == "launch", matrix_file=None
+        )
+        if name == "plan":
+            leaf.add_argument(
+                "--matrix",
+                dest="matrix_file",
+                type=Path,
+                help="JSON object defining matrix parameters (default: not set)",
+            )
+        else:
+            _add_stream_output_argument(leaf)
+    for name in ("run", "retry"):
+        leaf = leaves.add_parser(
+            name,
+            help="execute eligible experiments" if name == "run" else "archive and retry failed experiments",
+            epilog=_WORKSPACE_HELP,
+            formatter_class=SemanticDefaultsHelpFormatter,
+        )
+        leaf.add_argument("paths", type=Path, nargs="+", metavar="PATH", help="experiment or report-root paths")
+        _add_stream_output_argument(leaf)
+        leaf.set_defaults(handler=commands.run, command_name=name, retry=name == "retry", force=False, max_tasks=None)
+        if name == "run":
+            leaf.add_argument(
+                "-n",
+                "--max-tasks",
+                type=_positive_integer,
+                metavar="N",
+                help="successful-completion quota across queue refills (default: unlimited)",
+            )
+        else:
+            leaf.add_argument(
+                "-f",
+                "--force",
+                action="store_true",
+                help="retry explicit experiment paths after confirming the old process stopped (default: disabled)",
+            )
+    leaf = leaves.add_parser(
+        "discover", help="inspect experiment paths without execution", formatter_class=SemanticDefaultsHelpFormatter
     )
-    _add_planning_arguments(plan)
-
-    launch = subparsers.add_parser(
-        "launch",
-        help="create and immediately run one experiment",
-        description="Create one Git-backed or non-Git experiment directory and execute it immediately.",
-        formatter_class=SemanticDefaultsHelpFormatter,
-    )
-    _add_planning_arguments(launch)
-    _add_stream_output_argument(launch)
-
-    matrix = subparsers.add_parser(
-        "matrix",
-        help="create a Cartesian experiment matrix from one shared source",
-        description="Create a Cartesian matrix of plans that all share one resolved Git-backed or non-Git source.",
-        formatter_class=SemanticDefaultsHelpFormatter,
-    )
-    matrix.add_argument(
-        "--matrix-file",
+    leaf.add_argument(
+        "paths",
         type=Path,
-        required=True,
-        help="JSON object defining matrix parameters (required)",
+        nargs="*",
+        default=[Path(".")],
+        metavar="PATH",
+        help="paths to inspect (default: current directory)",
     )
-    _add_planning_arguments(matrix)
-
-    matrix_show = subparsers.add_parser(
-        "matrix-show",
-        help="render a persisted matrix configuration mapping",
-        description=(
-            "Render a persisted matrix configuration mapping. This command only inspects; "
-            "it never plans, executes, or changes experiment state."
-        ),
+    hints = leaf.add_mutually_exclusive_group()
+    hints.add_argument(
+        "--older-than",
+        type=_duration_argument,
+        metavar="DURATION",
+        help="read-only age hint (default: not set)",
+    )
+    hints.add_argument(
+        "--started-before",
+        dest="updated_before",
+        type=_utc_timestamp_argument,
+        metavar="TIMESTAMP",
+        help="read-only start-time cutoff (default: not set)",
+    )
+    leaf.set_defaults(handler=commands.discover, command_name="discover")
+    leaf = leaves.add_parser(
+        "mapping",
+        help="render a saved matrix mapping without changing experiments",
         formatter_class=SemanticDefaultsHelpFormatter,
     )
-    matrix_show.add_argument(
-        "artifact",
-        type=Path,
-        help="matrix mapping JSON artifact written beside the generated experiment directories",
-    )
-
-    worker_inspect = subparsers.add_parser(
-        "worker-inspect",
-        help="render a worker workspace manifest",
-        description=(
-            "Render the runforge-worker.json manifest inside one worker workspace directory "
-            "(a runforge-worker-* directory). This command only inspects; it never executes "
-            "commands or removes anything."
-        ),
+    leaf.add_argument("artifact", type=Path)
+    leaf.set_defaults(handler=commands.matrix_show, command_name="mapping")
+    leaf = leaves.add_parser(
+        "schedule",
+        help="hold or release pending work without changing execution history",
         formatter_class=SemanticDefaultsHelpFormatter,
     )
-    worker_inspect.add_argument(
-        "workspace",
-        type=Path,
-        help="worker workspace directory (a runforge-worker-* directory) to inspect",
+    action = leaf.add_mutually_exclusive_group(required=True)
+    action.add_argument("--hold", dest="held", action="store_true", help="prevent future execution of selected plans")
+    action.add_argument(
+        "--release", dest="held", action="store_false", help="remove a scheduling hold, never an execution claim"
     )
-
-    worker_cleanup = subparsers.add_parser(
-        "worker-cleanup",
-        help="list, and with explicit confirmation remove, leftover worker workspaces",
-        description=(
-            "List every runforge-worker-* directory directly under one root -- workspaces a killed "
-            "worker left behind. Never removes anything by itself, and never selects a workspace by "
-            "age: pass --confirm with the exact discovered paths to remove, one invocation at a time. "
-            "A Git-sourced workspace is deregistered as a worktree, not just deleted."
-        ),
+    leaf.add_argument("paths", type=Path, nargs="+", metavar="PATH")
+    leaf.set_defaults(handler=commands.schedule, command_name="schedule")
+    leaf = leaves.add_parser(
+        "workspaces",
+        help="list recorded workspace identity; remove only explicitly named paths",
         formatter_class=SemanticDefaultsHelpFormatter,
     )
-    worker_cleanup.add_argument(
+    leaf.add_argument(
         "root",
         type=Path,
         nargs="?",
         default=None,
-        help=(
-            "directory to scan for runforge-worker-* directories "
-            "(default: RUNFORGE_WORKER_ROOT if set, else current directory)"
-        ),
+        help="workspace parent (default: RUNFORGE_WORKSPACE_ROOT, else current directory)",
     )
-    worker_cleanup.add_argument(
-        "--confirm",
+    leaf.add_argument(
+        "--remove",
+        dest="confirm",
         type=Path,
         nargs="+",
         metavar="WORKSPACE",
-        help="remove exactly these discovered workspace directories (default: list only, remove nothing)",
+        help="exact discovered workspaces to remove (default: list only, remove nothing)",
     )
-
-    run = subparsers.add_parser(
-        "run",
-        help="execute one explicit planned experiment directory",
-        description="Execute one explicit planned experiment directory.",
-        formatter_class=SemanticDefaultsHelpFormatter,
-    )
-    _add_stream_output_argument(run)
-    run.add_argument("experiment", type=Path, help="planned experiment directory to execute")
-
-    retry = subparsers.add_parser(
-        "retry",
-        help="archive and rerun one failed or interrupted experiment",
-        description=(
-            "Archive the previous outputs and immediately rerun one failed experiment. "
-            "An inprogress or claimed failed experiment additionally requires --force."
-        ),
-        formatter_class=SemanticDefaultsHelpFormatter,
-    )
-    _add_stream_output_argument(retry)
-    retry.add_argument(
-        "-f",
-        "--force",
-        action="store_true",
-        help=(
-            "retry an inprogress or claimed failed experiment after independently confirming its worker stopped "
-            "(default: disabled)"
-        ),
-    )
-    retry.add_argument("experiment", type=Path, help="failed or interrupted experiment directory to retry")
-
-    discover = subparsers.add_parser(
-        "discover",
-        help="list planned experiments recursively",
-        description="Recursively inspect planned experiments without changing status or executing commands.",
-        formatter_class=SemanticDefaultsHelpFormatter,
-    )
-    discover.add_argument(
-        "root",
-        type=Path,
-        nargs="?",
-        default=Path("."),
-        help="directory to scan recursively (default: current directory)",
-    )
-    staleness_group = discover.add_mutually_exclusive_group()
-    staleness_group.add_argument(
-        "--older-than",
-        type=_duration_argument,
-        metavar="DURATION",
-        help=(
-            "flag inprogress experiments started more than DURATION ago, e.g. 6h, 30m, 2d "
-            "(default: not set; a hint only, never automatic recovery)"
-        ),
-    )
-    staleness_group.add_argument(
-        "--updated-before",
-        type=_utc_timestamp_argument,
-        metavar="TIMESTAMP",
-        help=(
-            "flag inprogress experiments started before this UTC ISO 8601 timestamp "
-            "(default: not set; a hint only, never automatic recovery)"
-        ),
-    )
-
-    worker = subparsers.add_parser(
-        "worker",
-        help="execute available experiments from one report root",
-        description=(
-            "Execute created and initialized experiments from one discovery snapshot, "
-            "using an atomic claim before each existing executor run."
-        ),
-        formatter_class=SemanticDefaultsHelpFormatter,
-    )
-    worker.add_argument(
-        "root",
-        type=Path,
-        nargs="?",
-        default=Path("."),
-        help="report root to scan once (default: current directory)",
-    )
-    worker.add_argument(
-        "-n",
-        "--max-tasks",
-        type=_positive_integer,
-        metavar="N",
-        help="maximum experiments to execute (default: unlimited; must be positive when set)",
-    )
-    _add_stream_output_argument(worker)
+    leaf.set_defaults(handler=commands.workspace_cleanup, command_name="workspaces")
     return parser
 
 

@@ -103,11 +103,11 @@ keeps the JSON type, so a number or boolean does not become a string:
 ```
 
 ```bash
-runforge matrix \
+runforge plan \
   --name sweep \
   --source-path "$REPO" \
   --commit HEAD \
-  --matrix-file matrix.json \
+  --matrix matrix.json \
   --input-tree "$REPO/configs" \
   -- python train.py '{INPUT_DIR}/train.json'
 ```
