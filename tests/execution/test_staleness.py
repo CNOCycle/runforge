@@ -6,11 +6,15 @@ import os
 import socket
 import subprocess
 import sys
+import time
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
+import runforge.execution.staleness as staleness_module
 from runforge.execution.discovery import discover_experiments
-from runforge.execution.staleness import describe_staleness
+from runforge.execution.staleness import assess_claim_liveness, describe_staleness, process_start_time
 from runforge.infrastructure.claims import ExperimentClaim
 from runforge.infrastructure.clock import parse_utc, utc_now
 from runforge.infrastructure.json_store import save_json_object
@@ -24,6 +28,7 @@ NOW = datetime.now(timezone.utc)
 FAR_FUTURE_CUTOFF = NOW + timedelta(days=365)
 FAR_PAST_CUTOFF = NOW - timedelta(days=365)
 ELAPSED_TOLERANCE_SECONDS = 5
+START_TIME_SLACK_SECONDS = 2
 
 
 def _experiment(tmp_path, *, started_at: str | None, state: str = "inprogress"):
@@ -135,3 +140,62 @@ def test_describe_staleness_elapsed_matches_parsed_started_at(tmp_path):
 
     expected = (datetime.now(timezone.utc) - parse_utc(started_at)).total_seconds()
     assert abs(hint.elapsed_seconds - expected) < ELAPSED_TOLERANCE_SECONDS
+
+
+def _own_claim(acquired_at: str) -> ExperimentClaim:
+    return ExperimentClaim(token="t", owner=f"{socket.gethostname()}:{os.getpid()}", acquired_at=acquired_at)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Process start time uses Linux /proc")
+def test_process_start_time_orders_parent_before_child():
+    started = process_start_time(os.getpid())
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
+    try:
+        child_started = process_start_time(child.pid)
+    finally:
+        child.kill()
+        child.wait()
+
+    assert started is not None
+    assert child_started is not None
+    assert started <= child_started <= time.time() + START_TIME_SLACK_SECONDS
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Process start time uses Linux /proc")
+def test_claim_owned_by_a_running_pid_that_predates_it_is_active():
+    liveness = assess_claim_liveness(_own_claim(utc_now()))
+
+    assert liveness.verdict == "active"
+    assert liveness.pid_running
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Process start time uses Linux /proc")
+def test_running_pid_started_after_the_claim_is_reused_and_stale():
+    # A restarted container keeps its hostname while PIDs restart, so the new
+    # worker can hold the very PID recorded by the claim it is inspecting.
+    liveness = assess_claim_liveness(_own_claim("2000-01-01T00:00:00Z"))
+
+    assert liveness.verdict == "stale"
+    assert liveness.pid_running
+    assert "reused by a process started after the claim" in liveness.description
+
+
+def test_running_pid_without_start_time_is_unknown(monkeypatch):
+    monkeypatch.setattr(staleness_module, "process_start_time", lambda _pid: None)
+
+    liveness = assess_claim_liveness(_own_claim("2000-01-01T00:00:00Z"))
+
+    assert liveness.verdict == "unknown"
+    assert liveness.pid_running
+    assert "PID reuse not excluded" in liveness.description
+
+
+def test_dead_and_foreign_owners_are_stale_and_unknown():
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+    assert process.wait() == 0
+    dead = ExperimentClaim(token="t", owner=f"{socket.gethostname()}:{process.pid}", acquired_at=utc_now())
+    foreign = ExperimentClaim(token="t", owner="another-host:42", acquired_at=utc_now())
+
+    assert assess_claim_liveness(dead).verdict == "stale"
+    assert not assess_claim_liveness(dead).pid_running
+    assert assess_claim_liveness(foreign).verdict == "unknown"

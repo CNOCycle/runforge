@@ -11,6 +11,7 @@ from typing import Literal
 from runforge.execution.discovery import DiscoveredExperiment, DiscoveryError, DiscoveryResult, discover_paths
 from runforge.execution.errors import ExperimentHeldError, ExperimentNotRunnableError, WorkerError
 from runforge.execution.process import CommandExecutionError, run_command
+from runforge.execution.recovery import recovery_messages
 from runforge.execution.retry import RetryError, acquire_retry_claim, is_retryable_state, prepare_retry
 from runforge.execution.scheduling import SchedulingError, is_held
 from runforge.execution.sources import preparation_for
@@ -82,7 +83,7 @@ class _ExecutionOptions:
 class WorkerProgressEvent:
     """One observable worker lifecycle transition."""
 
-    phase: Literal["preparing", "executing", "completed", "failed", "warning"]
+    phase: Literal["preparing", "executing", "completed", "failed", "warning", "recovery"]
     experiment: Path
     stdout_log: Path
     stderr_log: Path
@@ -189,6 +190,12 @@ def execute_paths(
         experiments = {item.path for item in initial.experiments}
         if not request.retry or any(Path(path).expanduser().resolve() not in experiments for path in request.paths):
             raise WorkerError("Forced retry requires explicit experiment-directory paths, not report roots")
+    if progress is not None:
+        for path, message in recovery_messages(initial.experiments):
+            _notify_progress(
+                progress,
+                replace(_progress_event("recovery", ExperimentDirectory(path), request.stream_output), error=message),
+            )
     return _BatchExecution(request, initial, progress).run()
 
 
@@ -561,7 +568,7 @@ def _run_in_working_directory(
 
 
 def _progress_event(
-    phase: Literal["preparing", "executing", "completed", "failed", "warning"],
+    phase: Literal["preparing", "executing", "completed", "failed", "warning", "recovery"],
     experiment: ExperimentDirectory,
     stream_output: bool,
     *,

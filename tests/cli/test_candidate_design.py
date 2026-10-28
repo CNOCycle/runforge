@@ -212,7 +212,7 @@ def test_force_retry_rejects_an_unusable_claim_without_counting_an_execution_fai
 
 
 @pytest.mark.parametrize("explicit", [True, False])
-def test_retry_claim_contention_keeps_history_and_guides_explicit_targets(tmp_path, capsys, explicit):
+def test_retry_claim_contention_keeps_history_and_guides_root_and_explicit_targets(tmp_path, capsys, explicit):
     experiment = _plan(tmp_path, capsys, "raise SystemExit(7)\n")
     assert main(["run", str(experiment)]) == FAILURE_EXIT
     layout = ExperimentDirectory.resolve(experiment)
@@ -227,12 +227,11 @@ def test_retry_claim_contention_keeps_history_and_guides_explicit_targets(tmp_pa
     captured = capsys.readouterr()
     assert "claim contention: 1" in captured.out
     assert "  selected: 0" in captured.out
+    assert "Existing execution: state=failed" in captured.err
+    assert "node7:123" in captured.err
+    assert "--force" in captured.err
     if explicit:
-        assert "node7:123" in captured.err
-        assert "--force" in captured.err
         assert "confirming" in captured.err
-    else:
-        assert captured.err == ""
     assert layout.status_file.read_bytes() == status
     assert layout.claim_file.read_bytes() == claim
     assert not list(experiment.glob("attempt-*"))

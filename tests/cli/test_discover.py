@@ -220,6 +220,31 @@ def test_discover_cli_with_updated_before_uses_an_explicit_cutoff(tmp_path, caps
     assert "cannot verify liveness: claim metadata is missing or unreadable" in output
 
 
+@pytest.mark.parametrize("pid_text", ["\N{SUPERSCRIPT TWO}", "\N{FULLWIDTH DIGIT ONE}"])
+def test_discover_cli_with_non_ascii_pid_keeps_listing_read_only(tmp_path, capsys, pid_text):
+    root = tmp_path / "reports"
+    old = root / "a-old"
+    following = root / "b-following"
+    _experiment(old, name="old-run", state="inprogress", started_at="2020-01-01T00:00:00Z")
+    _claim(old, owner=f"{socket.gethostname()}:{pid_text}")
+    _experiment(following, name="following-run")
+    records = [*old.rglob("*.json"), *following.rglob("*.json")]
+    before = {path: path.read_bytes() for path in records}
+
+    assert main(["discover", str(root), "--older-than", "1h"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "is not in HOSTNAME:PID form" in captured.out
+    assert f"path={old.resolve()}" in captured.out
+    assert f"path={following.resolve()}" in captured.out
+    assert "Summary:" in captured.out
+    assert "  inprogress: 1" in captured.out
+    assert "  created: 1" in captured.out
+    assert "  invalid: 0" in captured.out
+    assert {path: path.read_bytes() for path in records} == before
+
+
 def test_discover_cli_without_staleness_flags_never_reads_a_claim_file(tmp_path, capsys):
     root = tmp_path / "reports"
     old = root / "old-inprogress"

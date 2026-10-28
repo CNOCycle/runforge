@@ -219,8 +219,10 @@ def print_worker_progress(event: WorkerProgressEvent) -> None:
     if event.phase == "completed":
         _worker_print(f"Experiment completed with exit code {event.exit_code}{task}: {event.experiment}")
         return
-    if event.phase == "warning":
-        _worker_print(f"warning: {event.error}: {event.experiment}", file=sys.stderr)
+    if event.phase in {"warning", "recovery"}:
+        # A multi-line recovery block already names its experiment path.
+        location = "" if event.phase == "recovery" else f": {event.experiment}"
+        _worker_print(f"warning: {event.error}{location}", file=sys.stderr)
         return
     if event.exit_code is not None:
         message = f"Experiment failed with exit code {event.exit_code}{task}: {event.experiment}"
