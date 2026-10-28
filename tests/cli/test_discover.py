@@ -129,8 +129,8 @@ def test_discover_cli_lists_valid_plans_and_reports_invalid_candidates(tmp_path,
     valid = root / "valid"
     invalid = root / "invalid"
     _experiment(valid, name="valid")
-    invalid.mkdir()
-    (invalid / "config.json").write_text("{}\n", encoding="utf-8")
+    _experiment(invalid, name="invalid")
+    (invalid / "status.json").unlink()
 
     assert main(["discover", str(root)]) == CLI_ERROR_EXIT
 

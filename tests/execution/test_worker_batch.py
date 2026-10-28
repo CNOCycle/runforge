@@ -112,7 +112,10 @@ def test_worker_continues_past_contention_until_task_budget_is_met(tmp_path):
 
 
 def test_worker_continues_past_failures_until_completion_budget_is_met(tmp_path):
-    _plan(tmp_path, "failing", "raise SystemExit(7)\n")
+    failing = _plan(tmp_path, "failing", "raise SystemExit(7)\n")
+    # Commit hashes contain timestamps; force the failure before the quota's
+    # successful tasks rather than relying on hash ordering.
+    failing.rename(tmp_path / "reports" / "000-failing")
     _plan(tmp_path, "successful-one", "print('successful one')\n")
     _plan(tmp_path, "successful-two", "print('successful two')\n")
 

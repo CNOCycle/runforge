@@ -90,11 +90,12 @@ def test_discovery_reports_invalid_candidates_and_keeps_valid_ones(tmp_path):
     missing_status = root / "missing-status"
     invalid_configuration = root / "invalid-configuration"
     _experiment(valid)
-    missing_status.mkdir(parents=True)
-    (missing_status / "config.json").write_text("{}\n", encoding="utf-8")
+    _experiment(missing_status)
+    (missing_status / "status.json").unlink()
     invalid_configuration.mkdir()
     (invalid_configuration / "config.json").write_text("{broken\n", encoding="utf-8")
     (invalid_configuration / "status.json").write_text("{}\n", encoding="utf-8")
+    (invalid_configuration / "cmd.sh").write_text("# generated command\n")
 
     result = discover_experiments(root)
 
@@ -138,3 +139,57 @@ def test_discovery_rejects_an_invalid_root(tmp_path, root_kind):
 
     with pytest.raises(DiscoveryError, match="Discovery root"):
         discover_experiments(root)
+
+
+@pytest.mark.parametrize("payload", ["inputs", "artifacts", "source"])
+def test_discovery_prunes_experiment_payloads(tmp_path, payload):
+    experiment = tmp_path / "reports" / "experiment"
+    _experiment(experiment)
+    _experiment(experiment / payload / "nested-plan")
+    (experiment / payload / "config.json").write_text("{}\n", encoding="utf-8")
+
+    result = discover_experiments(tmp_path / "reports")
+
+    assert [item.path for item in result.experiments] == [experiment.resolve()]
+    assert result.diagnostics == ()
+
+
+def test_discovery_ordinary_config_does_not_hide_descendant_plans(tmp_path):
+    (tmp_path / "config.json").write_text("{}\n", encoding="utf-8")
+    _experiment(tmp_path / "reports" / "experiment")
+
+    result = discover_experiments(tmp_path)
+
+    assert [item.path for item in result.experiments] == [(tmp_path / "reports" / "experiment").resolve()]
+    assert result.diagnostics == ()
+
+
+@pytest.mark.parametrize("filename", ["config.json", "status.json"])
+def test_discovery_reports_malformed_standalone_metadata_without_hiding_descendants(tmp_path, filename):
+    damaged = tmp_path / "damaged"
+    damaged.mkdir()
+    metadata = damaged / filename
+    metadata.write_text("{broken\n")
+    _experiment(damaged / "artifacts" / "nested-plan")
+
+    result = discover_experiments(tmp_path)
+
+    assert [item.path for item in result.experiments] == [(damaged / "artifacts" / "nested-plan").resolve()]
+    assert [item.path for item in result.diagnostics] == [metadata.resolve()]
+    assert metadata.read_text() == "{broken\n"
+
+
+@pytest.mark.parametrize("signal", ["command", "kind"])
+def test_discovery_still_prunes_a_damaged_experiment_with_independent_evidence(tmp_path, signal):
+    damaged = tmp_path / "damaged"
+    _experiment(damaged)
+    (damaged / "config.json").write_text("{broken\n")
+    if signal == "command":
+        (damaged / "status.json").unlink()
+        (damaged / "cmd.sh").write_text("# generated command\n")
+    _experiment(damaged / "artifacts" / "nested-plan")
+
+    result = discover_experiments(tmp_path)
+
+    assert result.experiments == ()
+    assert [item.path for item in result.diagnostics] == [damaged.resolve()]
