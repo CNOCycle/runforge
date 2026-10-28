@@ -211,6 +211,20 @@ previous one under `attempt-NNNN/`:
 runforge retry "$REPORT_ROOT/main/01234567_baseline_0000"
 ```
 
+Ordinary retry starts with an empty artifact directory. If the recorded command
+already resumes from checkpoints in that directory, copy the previous artifacts
+into the new attempt with:
+
+```bash
+runforge retry --reuse-artifacts "$REPORT_ROOT/main/01234567_baseline_0000"
+```
+
+The previous attempt remains an independent archive. Reuse copies the entire
+artifact tree, so allow extra disk space and copy time; it does not enable resume
+in the application or restore the old process. See the
+[checkpoint recovery guide](docs/guides/workers-and-recovery.md#reuse-artifacts-for-application-checkpoint-recovery)
+for bulk retries, supported files, and interrupted-copy handling.
+
 An `inprogress` or claimed experiment requires `--force` after you have
 confirmed the original process stopped. See
 [Workers and recovery](docs/guides/workers-and-recovery.md).

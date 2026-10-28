@@ -84,6 +84,16 @@ on experiment start time. They do not recover tasks or remove claims. -f/--force
 is only an operator-confirmed retry override after independently checking that
 prior worker/child processes stopped; it cannot prove abandonment.
 
+retry --reuse-artifacts copies the immediately preceding attempt's entire
+artifact tree into the current artifact directory after archiving the original.
+It is disabled by default; normal retry starts with empty artifacts. The recorded
+command must already support checkpoint recovery. Copies are independent of the
+archive, current logs are fresh, and symbolic links/special files are rejected.
+Root selection reuses each eligible failed experiment's own artifacts. Combining
+it with --force still requires explicit experiment paths and confirmation that
+prior workers and children stopped. See the [checkpoint recovery guide](../guides/workers-and-recovery.md#reuse-artifacts-for-application-checkpoint-recovery)
+for costs, limitations, and interrupted preparation.
+
 ## Environment and output
 
 | Variable | Role |
@@ -98,7 +108,8 @@ An unusable configured parent fails rather than silently changing location.
 Effective arguments print paths/choices and environment key names, never ambient
 or captured environment values. Each selected task reports its environment keys,
 artifact directory, and executing attempt number before the child command begins.
-Run arguments report the completion quota; retry arguments report force instead.
+Run arguments report the completion quota; retry arguments report force and
+artifact reuse.
 Progress, logs, summaries, matrix tables, and
 warnings remain human-readable; no machine-readable output protocol is added.
 Workspace identity describes its recorded creator, not current process activity.

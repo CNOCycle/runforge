@@ -60,6 +60,13 @@ operator confirmation; it is not a guarantee against a still-live prior child.
 Previous attempt history is archived before another attempt begins. Normal retry
 preparation and execution share claim ownership.
 
+Opt-in retry --reuse-artifacts copies the preceding artifact tree into owned
+hidden staging before moving outputs, publishes a complete independent seed,
+then resets status last. Caught preparation failures restore the previous layout;
+interrupted staging or archive conflicts require manual inspection. Applications
+own checkpoint loading; RunForge does not change the recorded command or restore
+an old process. Ordinary retry still starts with empty artifacts.
+
 Workspace identity is diagnostic only. Listing/inspection is not an abandonment
 check. Cleanup removes only explicitly named discovered workspaces, including
 Git worktree deregistration. The workspace root (RUNFORGE_WORKSPACE_ROOT) is separate from the

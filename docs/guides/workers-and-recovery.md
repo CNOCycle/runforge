@@ -101,9 +101,11 @@ make retry accept it.
 
 Retry starts the recorded command as a new attempt. Git and snapshot sources use
 a fresh workspace; verified-directory sources execute in the original directory.
-It does not resume the old process. Application checkpoint recovery must be
-supported by the command and its checkpoint paths. Saved outputs move into
-attempt-NNNN, so inspect the archived checkpoint location before retry.
+It does not resume the old process. Ordinary retry moves saved outputs into
+attempt-NNNN and starts with empty artifacts. To make previous artifacts available
+at their usual paths for an application that already supports checkpoint recovery,
+use [retry --reuse-artifacts](#reuse-artifacts-for-application-checkpoint-recovery).
+It can be combined with --force after the same independent ownership check.
 
 After preserving anything needed from a confirmed abandoned workspace, remove
 that exact workspace and inspect the durable report again:
@@ -252,6 +254,60 @@ invocation, not repeatedly until they succeed.
 A claimed failed experiment named explicitly is skipped with its recorded owner
 and force-recovery guidance. The skip still returns 0; it does not prove a retry
 ran. Confirm that the old worker and child stopped before using --force.
+
+## Reuse artifacts for application checkpoint recovery
+
+Use ordinary retry for fresh artifacts, or opt in to copying the immediately
+preceding attempt's full artifact tree to the unchanged current artifact path:
+
+```bash
+runforge retry "$EXPERIMENT"
+runforge retry --reuse-artifacts "$EXPERIMENT"
+runforge retry --reuse-artifacts "$REPORT_ROOT"
+```
+
+The root form retries each eligible failed experiment using its own previous
+artifacts. Only run the example that matches your intended retry. Reuse remains
+subject to holds, claims, and eligible states. For a confirmed interrupted worker,
+both flags are needed to override ownership and reuse its outputs:
+
+```bash
+# Only after confirming that the old worker AND child stopped:
+runforge retry --force --reuse-artifacts "$EXPERIMENT"
+```
+
+The immutable recorded command and configuration are unchanged. The application
+must already enable checkpoint loading from RUNFORGE_ARTIFACT_DIR (or its
+recorded artifact-path argument). RunForge does not add resume flags, select a
+checkpoint format, verify restored progress, or reuse the old worker workspace.
+An empty artifact directory is valid to copy; it does not establish that a
+checkpoint exists or that any progress was resumed.
+
+Previous status, stdout/stderr logs, and original artifacts stay in attempt-NNNN.
+The new attempt gets separate current logs and independent copied files: updating
+them cannot modify the archive. Copying needs roughly one extra artifact tree's
+worth of disk space; elapsed time depends on bytes, file count, and storage
+throughput. No performance measurements are promised. The whole tree is copied,
+including files unrelated to checkpoints. Regular files and directories are
+supported; symbolic links and special files are rejected. Missing artifacts are
+a preparation error. Ordinary retry keeps its existing fresh-output behavior.
+
+Preparation checks and copies the tree in a hidden .attempt-NNNN.tmp-* directory
+before moving old outputs. It publishes only a complete seed, then resets status
+to init. Caught copy/status-reset errors roll back without starting a command or
+incrementing the attempt; the batch reports invalid work with exit 2. If rollback
+also fails, the error names the locations to preserve and inspect.
+
+An abrupt termination can bypass rollback. A leftover staging directory for the
+same attempt or an already-existing attempt archive blocks another retry with a
+diagnostic. First confirm all prior workers and children stopped and preserve a
+backup of the experiment and reported staging/archive paths. Inspect
+status.snapshot.json, logs, and the original artifacts there before restoring a
+consistent prior layout. The hidden .artifacts-seed is a working copy and may be
+partial; preserve the original artifact tree as the recovery source. Do not
+delete archives to bypass a collision or mark a partial seed runnable by editing
+status. There is no automatic interrupted-preparation repair or guarantee of
+power-loss atomicity.
 
 ## Temporary workspace identity and cleanup
 
