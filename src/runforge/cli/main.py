@@ -1,217 +1,24 @@
-"""Command dispatch and workflow composition for the RunForge CLI."""
+"""Parse the CLI and invoke its command handler."""
 
 from __future__ import annotations
 
-import argparse
 import sys
-import warnings
-from collections.abc import Callable, Sequence
-from datetime import datetime, timezone
-from pathlib import Path
+from collections.abc import Sequence
 
-from runforge.cli.output import (
-    path_text,
-    print_discover_arguments,
-    print_discovered_workspaces,
-    print_discovery,
-    print_matrix_mapping,
-    print_matrix_mapping_file,
-    print_matrix_show_arguments,
-    print_planning_arguments,
-    print_removed_workspace,
-    print_retry_arguments,
-    print_run_arguments,
-    print_worker_arguments,
-    print_worker_cleanup_arguments,
-    print_worker_inspect_arguments,
-    print_worker_manifest_file,
-    print_worker_progress,
-    print_worker_summary,
-)
+from runforge.cli.commands import _COMMANDS
 from runforge.cli.parser import build_parser
-from runforge.cli.requests import matrix_request, planning_request
-from runforge.execution.discovery import DiscoveryError, discover_experiments
-from runforge.execution.retry import RetryError, prepare_retry
-from runforge.execution.worker import WorkerError, run_experiment, run_worker
-from runforge.execution.workspace_cleanup import (
-    WorkspaceCleanupError,
-    default_workspace_root,
-    discover_workspaces,
-    remove_workspace,
-)
-from runforge.planning.matrix_mapping import build_matrix_mapping, save_matrix_mapping
-from runforge.planning.planner import MatrixPlanRequest, PlanningError, PlanRequest, plan_experiment, plan_matrix
+from runforge.execution.discovery import DiscoveryError
+from runforge.execution.retry import RetryError
+from runforge.execution.worker import WorkerError
+from runforge.execution.workspace_cleanup import WorkspaceCleanupError
+from runforge.planning.planner import PlanningError
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the RunForge CLI and return its process exit code."""
     arguments = build_parser().parse_args(argv)
     try:
-        return _dispatch(arguments)
+        return _COMMANDS[arguments.subcommand](arguments)
     except (DiscoveryError, PlanningError, RetryError, WorkerError, WorkspaceCleanupError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
-
-
-def _dispatch(arguments: argparse.Namespace) -> int:
-    # A table rather than a branch per subcommand: adding one no longer pushes
-    # this function past the configured complexity and return-count limits.
-    return _COMMANDS[arguments.subcommand](arguments)
-
-
-def _run_run_command(arguments: argparse.Namespace) -> int:
-    print_run_arguments(arguments)
-    return run_experiment(
-        arguments.experiment,
-        stream_output=arguments.stream_output,
-        progress=print_worker_progress,
-    )
-
-
-def _run_matrix_command(arguments: argparse.Namespace) -> int:
-    request = matrix_request(arguments)
-    print_planning_arguments(
-        arguments,
-        request.template,
-        extra=(
-            ("matrix file", path_text(arguments.matrix_file)),
-            ("matrix combinations", str(len(request.combinations))),
-        ),
-    )
-    experiments = _plan_matrix_with_warnings(request)
-    # The plans are already published and runnable, so a mapping failure must
-    # not hide them or make a successful expansion look like a failed one.
-    try:
-        print_matrix_mapping(build_matrix_mapping(experiments))
-        print(f"Matrix mapping saved at: {save_matrix_mapping(experiments)}", flush=True)
-    except ValueError as error:
-        print(f"warning: Could not record the matrix mapping: {error}", file=sys.stderr, flush=True)
-    print(f"Experiment plans created ({len(experiments)}):", flush=True)
-    for experiment in experiments:
-        print(f"  {experiment}", flush=True)
-    return 0
-
-
-def _run_matrix_show_command(arguments: argparse.Namespace) -> int:
-    print_matrix_show_arguments(arguments)
-    print_matrix_mapping_file(arguments.artifact)
-    return 0
-
-
-def _run_worker_inspect_command(arguments: argparse.Namespace) -> int:
-    print_worker_inspect_arguments(arguments)
-    print_worker_manifest_file(arguments.workspace)
-    return 0
-
-
-def _run_worker_cleanup_command(arguments: argparse.Namespace) -> int:
-    root = arguments.root if arguments.root is not None else default_workspace_root()
-    print_worker_cleanup_arguments(arguments, root)
-    discovered = discover_workspaces(root)
-    print_discovered_workspaces(discovered)
-    if arguments.confirm is None:
-        return 0
-    discovered_paths = {workspace.path for workspace in discovered}
-    requested = tuple(Path(path).expanduser().resolve() for path in arguments.confirm)
-    unknown = tuple(path for path in requested if path not in discovered_paths)
-    if unknown:
-        raise WorkerError(
-            "--confirm named a path that discovery did not find: " + ", ".join(str(path) for path in unknown)
-        )
-    for path in requested:
-        remove_workspace(path)
-        print_removed_workspace(path)
-    return 0
-
-
-def _run_plan_command(arguments: argparse.Namespace) -> int:
-    request = planning_request(arguments)
-    print_planning_arguments(arguments, request)
-    experiment = _plan_with_warnings(request)
-    print(f"Experiment plan created at: {experiment}", flush=True)
-    if arguments.subcommand != "launch":
-        return 0
-    return run_experiment(
-        experiment,
-        stream_output=arguments.stream_output,
-        progress=print_worker_progress,
-    )
-
-
-def _run_retry_command(arguments: argparse.Namespace) -> int:
-    print_retry_arguments(arguments)
-    preparation = prepare_retry(arguments.experiment, force=arguments.force)
-    if preparation.forced:
-        print(
-            "warning: Forced retry cannot prove that the previous worker has stopped",
-            file=sys.stderr,
-            flush=True,
-        )
-    print(f"Previous attempt archived at: {preparation.archive}", flush=True)
-    return run_experiment(
-        preparation.experiment,
-        stream_output=arguments.stream_output,
-        progress=print_worker_progress,
-    )
-
-
-def _run_discover_command(arguments: argparse.Namespace) -> int:
-    cutoff = _resolve_stale_cutoff(arguments)
-    print_discover_arguments(arguments, stale_cutoff=cutoff)
-    result = discover_experiments(arguments.root)
-    print_discovery(result, stale_cutoff=cutoff)
-    return 2 if result.diagnostics else 0
-
-
-def _resolve_stale_cutoff(arguments: argparse.Namespace) -> datetime | None:
-    if arguments.older_than is not None:
-        return datetime.now(timezone.utc) - arguments.older_than
-    if arguments.updated_before is not None:
-        return arguments.updated_before
-    return None
-
-
-def _run_worker_command(arguments: argparse.Namespace) -> int:
-    print_worker_arguments(arguments)
-    result = run_worker(
-        arguments.root,
-        max_tasks=arguments.max_tasks,
-        stream_output=arguments.stream_output,
-        progress=print_worker_progress,
-    )
-    print_worker_summary(result)
-    if result.invalid:
-        return 2
-    return 1 if result.failed else 0
-
-
-def _plan_with_warnings(request: PlanRequest) -> Path:
-    with warnings.catch_warnings(record=True) as captured:
-        warnings.simplefilter("always")
-        experiment = plan_experiment(request)
-    for captured_warning in captured:
-        print(f"warning: {captured_warning.message}", file=sys.stderr)
-    return experiment
-
-
-def _plan_matrix_with_warnings(request: MatrixPlanRequest) -> tuple[Path, ...]:
-    with warnings.catch_warnings(record=True) as captured:
-        warnings.simplefilter("always")
-        experiments = plan_matrix(request)
-    for captured_warning in captured:
-        print(f"warning: {captured_warning.message}", file=sys.stderr)
-    return experiments
-
-
-_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
-    "plan": _run_plan_command,
-    "launch": _run_plan_command,
-    "matrix": _run_matrix_command,
-    "matrix-show": _run_matrix_show_command,
-    "worker-inspect": _run_worker_inspect_command,
-    "worker-cleanup": _run_worker_cleanup_command,
-    "run": _run_run_command,
-    "retry": _run_retry_command,
-    "discover": _run_discover_command,
-    "worker": _run_worker_command,
-}
