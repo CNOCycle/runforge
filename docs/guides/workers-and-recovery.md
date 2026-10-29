@@ -320,8 +320,11 @@ runforge workspaces "$WORKSPACE_ROOT" --remove "$WORKSPACE"
 Listing is read-only and shows recorded source identity/reference, host, PID,
 owner, and start time, or explicit unknown identity. These records do not prove
 that a process is alive or abandoned. Confirm independently before removal.
-Named workspaces must be found directly under the workspace root; unrelated
-paths are rejected. Git worktrees are deregistered rather than merely deleted.
+When the manifest is missing or unreadable, a matching directory name alone
+does not establish that the directory is a RunForge workspace. Inspect it before
+removal.
+Only explicitly named paths found directly under the workspace root can be
+removed. Git worktrees are deregistered rather than merely deleted.
 
 Set RUNFORGE_WORKSPACE_ROOT to an existing writable workspace parent for one location to inspect
 and clean. It is a temporary workspace root, not a report root. Experiment

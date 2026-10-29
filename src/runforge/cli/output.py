@@ -171,7 +171,12 @@ def print_discovered_workspaces(discovered: Sequence[DiscoveredWorkspace]) -> No
                 "    recorded identity only; process activity is not verified"
             )
         else:
-            print(f"  {workspace.path.name}\n    manifest unavailable: {workspace.manifest_error}")
+            print(
+                f"  {workspace.path.name}\n"
+                f"    manifest unavailable: {workspace.manifest_error}\n"
+                "    warning: a matching name alone does not establish that this is a RunForge workspace; "
+                "verify before removal"
+            )
 
 
 def print_removed_workspace(path: Path) -> None:
