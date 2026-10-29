@@ -25,10 +25,11 @@ observations, not a guarantee about activity when execution acquires its claim.
 
 Startup reuses the initial report scan. For affected records, it searches each
 current workspace parent once: RUNFORGE_WORKSPACE_ROOT when configured, otherwise
-the Git repository's parent or the system temporary directory for snapshots.
+`runforge-workspaces` beside the recorded Git or snapshot source.
 It does not search every disk or a previous container's workspace location.
-Use the explicit checks below for old locations, all workspaces, and experiments
-outside the selected paths. Verified-directory execution creates no workspace.
+Use the explicit checks below for workspaces and experiments outside the selected
+paths. Legacy workspace formats are not listed. Verified-directory execution
+creates no workspace.
 
 ```bash
 runforge discover "$REPORT_ROOT"

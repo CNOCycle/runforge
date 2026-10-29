@@ -117,8 +117,8 @@ on the source mode:
 
 | Source mode | Default working directory |
 | --- | --- |
-| current-head / pinned-git | A new runforge-worker-* directory beside the source repository. For /work/project, this is /work/runforge-worker-*. |
-| directory-snapshot | A captured source copy inside runforge-worker-* under the system temporary directory, usually /tmp. |
+| current-head / pinned-git | A workdir under `runforge-workspaces` beside the repository, e.g. `/work/runforge-workspaces/project-<unique-id>` for `/work/project`. |
+| directory-snapshot | A captured source copy under the same sibling `runforge-workspaces` root. |
 | verified-directory | The original source directory; no temporary workspace is created. |
 
 To put Git and snapshot workspaces in one location of your choice, create a
@@ -145,8 +145,8 @@ runforge workspaces "$WORKSPACE_ROOT"
 
 With RUNFORGE_WORKSPACE_ROOT set, plain runforge workspaces uses that parent too.
 When unset, workspace listing scans the current directory; pass the source
-repository's parent or the snapshot temporary parent explicitly to inspect
-default workspaces. See [workers and recovery](docs/guides/workers-and-recovery.md)
+parent's `runforge-workspaces` directory explicitly to inspect default workspaces.
+Legacy workspace formats are not listed. See [workers and recovery](docs/guides/workers-and-recovery.md)
 for leftovers after interrupted execution.
 
 Run the experiment directory printed by planning on the same or another machine
