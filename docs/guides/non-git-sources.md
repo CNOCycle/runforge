@@ -80,8 +80,11 @@ EXPERIMENT_DIR/
 Before execution the worker validates manifest membership, digests, executable
 bits, and the full-tree digest, materializes the verified source in an isolated
 temporary workspace, runs there, preserves logs and artifacts in the experiment
-directory, and removes the workspace. The original path is recorded only as
-provenance; the worker does not need it.
+directory, and removes the workspace. The original source directory can be
+missing. By default, the worker creates `runforge-workspaces` beside its recorded
+path, so that path's parent must exist and be writable on the execution machine.
+If it is unavailable, create a writable directory and set
+`RUNFORGE_WORKSPACE_ROOT` to that existing directory before starting the worker.
 
 Capture or verification failure leaves no partially published plan and never
 starts the command.

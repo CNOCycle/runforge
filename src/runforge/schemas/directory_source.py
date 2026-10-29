@@ -185,8 +185,8 @@ class VerifiedDirectorySource:
 class DirectorySnapshotSource:
     """Normalized identity for a self-contained captured directory snapshot.
 
-    ``original_path`` is diagnostic provenance only; the worker never requires
-    it to exist, since the snapshot itself is the source of truth.
+    The snapshot is the source of truth, so ``original_path`` need not exist.
+    Its parent selects the default worker workspace root unless overridden.
     """
 
     original_path: Path
