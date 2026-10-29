@@ -8,12 +8,13 @@ workspace for removal by itself, and in particular never by age.
 
 from __future__ import annotations
 
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from runforge.execution.errors import WorkerError
-from runforge.execution.sources import WORKSPACE_NAME_PREFIX, _configured_workspace_root, load_worker_manifest
+from runforge.execution.sources import _configured_workspace_root, load_worker_manifest
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.infrastructure.json_store import JsonStoreError
 from runforge.infrastructure.paths import is_safe_directory
@@ -51,7 +52,7 @@ class DiscoveredWorkspace:
 
 
 def discover_workspaces(root: Path) -> tuple[DiscoveredWorkspace, ...]:
-    """List every ``runforge-worker-*`` directory directly under root, without changing anything.
+    """List ``<project>-<unique-id>`` directories directly under root.
 
     Rejects a symlink candidate the same way every other RunForge path check
     does (``is_safe_directory``): a link makes what actually gets removed
@@ -60,7 +61,9 @@ def discover_workspaces(root: Path) -> tuple[DiscoveredWorkspace, ...]:
     resolved = _resolve_root(root)
     discovered: list[DiscoveredWorkspace] = []
     for candidate in sorted(resolved.iterdir()):
-        if not candidate.name.startswith(WORKSPACE_NAME_PREFIX) or not is_safe_directory(candidate):
+        if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?-[0-9a-f]{32}", candidate.name):
+            continue
+        if not is_safe_directory(candidate):
             continue
         manifest: WorkerManifest | None = None
         manifest_error: str | None = None

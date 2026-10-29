@@ -95,8 +95,11 @@ def test_startup_joins_workspaces_by_token_and_scans_shared_parent_once(tmp_path
     second = ExperimentDirectory(_plan(repository, tmp_path / "reports", "second"))
     first_claim = _existing(first, owner="same-owner")
     second_claim = _existing(second, owner="same-owner")
-    for name, claim in (("one", first_claim), ("two", second_claim)):
-        workspace = tmp_path / f"runforge-worker-{name}"
+    workspace_root = tmp_path / "runforge-workspaces"
+    workspace_root.mkdir()
+    names = ("repository-" + "1" * 32, "repository-" + "2" * 32)
+    for name, claim in zip(names, (first_claim, second_claim), strict=True):
+        workspace = workspace_root / name
         workspace.mkdir()
         _write_worker_manifest(
             workspace, source_kind="git", source_identity=str(repository), source_reference="a" * 40, claim=claim
@@ -113,11 +116,11 @@ def test_startup_joins_workspaces_by_token_and_scans_shared_parent_once(tmp_path
 
     output = capsys.readouterr().err
     first_report, second_report = output.split("Existing execution:")[1:]
-    assert "matching workspace: " + str(tmp_path / "runforge-worker-one") in first_report
-    assert "runforge-worker-two" not in first_report
-    assert "matching workspace: " + str(tmp_path / "runforge-worker-two") in second_report
-    assert "runforge-worker-one" not in second_report
-    assert calls == [tmp_path]
+    assert "matching workspace: " + str(workspace_root / names[0]) in first_report
+    assert names[1] not in first_report
+    assert "matching workspace: " + str(workspace_root / names[1]) in second_report
+    assert names[0] not in second_report
+    assert calls == [workspace_root]
 
 
 @pytest.mark.parametrize("claim_metadata", [None, "{broken JSON"])
@@ -363,7 +366,7 @@ def test_killed_worker_is_identified_and_force_retry_starts_new_attempt(tmp_path
     assert layout.load_status().state == "inprogress"
     old_status = layout.status_file.read_bytes()
     old_claim = layout.claim_file.read_bytes()
-    workspace = next(workspace_root.glob("runforge-worker-*"))
+    workspace = next(workspace_root.glob("repository-*"))
 
     assert main(["run", str(layout.root)]) == 0
     report = capsys.readouterr().err

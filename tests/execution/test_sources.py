@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import socket
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -15,77 +16,52 @@ from runforge.infrastructure.json_store import JsonStoreError, load_json_object,
 from runforge.schemas.worker_manifest import WORKER_MANIFEST_FILE, WorkerManifestError
 
 
-def test_worker_workspace_name_matches_the_git_naming_contract():
-    name = sources_module._worker_workspace_name("repo_A", "865dc691", non_git=False)
-    assert re.fullmatch(
-        rf"runforge-worker-repo_A-865dc691-\d{{8}}T\d{{6}}Z-p{os.getpid()}-[0-9a-f]{{4}}",
-        name,
-    )
+def test_workspace_name_contains_project_and_unique_id():
+    name = sources_module._worker_workspace_name("repo_A")
+    assert re.fullmatch(r"repo_A-[0-9a-f]{32}", name)
 
 
-def test_worker_workspace_name_matches_the_non_git_naming_contract():
-    name = sources_module._worker_workspace_name("source_A", "4f82a1c0", non_git=True)
-    assert re.fullmatch(
-        rf"runforge-worker-source_A-nongit-4f82a1c0-\d{{8}}T\d{{6}}Z-p{os.getpid()}-[0-9a-f]{{4}}",
-        name,
-    )
-
-
-@pytest.mark.parametrize(
-    "raw_slug",
-    [
-        "repo with spaces",
-        "repo:windows?",
-        "repo/with/slashes",
-        "  ../../etc  ",
-        "",
-        "????",
-    ],
-)
-def test_worker_workspace_name_slugifies_unusual_source_names(raw_slug):
-    name = sources_module._worker_workspace_name(raw_slug, "865dc691", non_git=False)
-
-    assert re.fullmatch(r"runforge-worker-[A-Za-z0-9._-]+-865dc691-\d{8}T\d{6}Z-p\d+-[0-9a-f]{4}", name)
+@pytest.mark.parametrize("raw_project", ["repo with spaces", "repo:windows?", "repo/with/slashes", "????"])
+def test_workspace_names_are_filesystem_safe(raw_project):
+    name = sources_module._worker_workspace_name(raw_project)
+    assert re.fullmatch(r"[A-Za-z0-9._-]+-[0-9a-f]{32}", name)
     assert "/" not in name
-    assert " " not in name
 
 
-def test_reserve_worker_workspace_creates_a_real_directory_for_an_unsafe_source_name(tmp_path):
-    result = sources_module._reserve_worker_workspace(tmp_path, "repo with spaces:windows?", "865dc691", non_git=False)
-
+def test_reserve_worker_workspace_creates_a_directory(tmp_path):
+    result = sources_module._reserve_worker_workspace(tmp_path, "repo_A")
     assert result.is_dir()
     assert result.parent == tmp_path
-    assert re.fullmatch(r"runforge-worker-repo-with-spaces-windows-865dc691-.+", result.name)
+    assert re.fullmatch(r"repo_A-[0-9a-f]{32}", result.name)
 
 
-def test_reserve_worker_workspace_creates_and_returns_the_directory(tmp_path):
-    result = sources_module._reserve_worker_workspace(tmp_path, "repo_A", "865dc691", non_git=False)
-    assert result.is_dir()
-    assert result.parent == tmp_path
-    assert re.fullmatch(r"runforge-worker-repo_A-865dc691-.+", result.name)
+def test_concurrent_workers_reserve_distinct_directories(tmp_path):
+    worker_count = 24
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        workdirs = list(
+            pool.map(lambda _: sources_module._reserve_worker_workspace(tmp_path, "repo_A"), range(worker_count))
+        )
+    assert len(set(workdirs)) == worker_count
+    assert all(path.is_dir() and path.parent == tmp_path for path in workdirs)
 
 
 def test_reserve_worker_workspace_retries_past_a_name_collision(tmp_path, monkeypatch):
-    (tmp_path / "runforge-worker-taken").mkdir()
-    names = iter(["runforge-worker-taken", "runforge-worker-free"])
-    monkeypatch.setattr(sources_module, "_worker_workspace_name", lambda *args, **kwargs: next(names))
-
-    result = sources_module._reserve_worker_workspace(tmp_path, "repo_A", "865dc691", non_git=False)
-
-    assert result == tmp_path / "runforge-worker-free"
+    (tmp_path / "taken").mkdir()
+    names = iter(["taken", "free"])
+    monkeypatch.setattr(sources_module, "_worker_workspace_name", lambda _: next(names))
+    assert sources_module._reserve_worker_workspace(tmp_path, "repo_A") == tmp_path / "free"
 
 
 def test_reserve_worker_workspace_gives_up_after_repeated_collisions(tmp_path, monkeypatch):
-    (tmp_path / "runforge-worker-taken").mkdir()
-    monkeypatch.setattr(sources_module, "_worker_workspace_name", lambda *args, **kwargs: "runforge-worker-taken")
-
+    (tmp_path / "taken").mkdir()
+    monkeypatch.setattr(sources_module, "_worker_workspace_name", lambda _: "taken")
     with pytest.raises(WorkerError, match="Could not create a unique worker workspace"):
-        sources_module._reserve_worker_workspace(tmp_path, "repo_A", "865dc691", non_git=False)
+        sources_module._reserve_worker_workspace(tmp_path, "repo_A")
 
 
 def test_reserve_worker_workspace_reports_an_unusable_root_clearly(tmp_path):
     with pytest.raises(WorkerError, match="Could not create worker workspace under"):
-        sources_module._reserve_worker_workspace(tmp_path / "does-not-exist", "repo_A", "865dc691", non_git=False)
+        sources_module._reserve_worker_workspace(tmp_path / "does-not-exist", "repo_A")
 
 
 def _claim() -> ExperimentClaim:

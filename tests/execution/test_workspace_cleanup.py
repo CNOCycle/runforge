@@ -23,23 +23,31 @@ CLAIM = ExperimentClaim(token="t", owner="node7:1", acquired_at="2026-07-30T18:1
 
 
 def test_discover_workspaces_finds_only_matching_directories(tmp_path):
-    (tmp_path / "runforge-worker-repo_A-865dc691-20260730T181530Z-p1-aaaa").mkdir()
-    (tmp_path / "runforge-worker-repo_B-97488696-20260730T182011Z-p2-bbbb").mkdir()
+    (tmp_path / "project-00000000000000000000000000000003").mkdir()
+    (tmp_path / "project-00000000000000000000000000000004").mkdir()
+    (tmp_path / "project--00000000000000000000000000000005").mkdir()
     (tmp_path / "unrelated-directory").mkdir()
-    (tmp_path / "runforge-worker-not-a-directory.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "project-00000000000000000000000000000002").write_text("x", encoding="utf-8")
 
     discovered = discover_workspaces(tmp_path)
 
     assert [workspace.path.name for workspace in discovered] == [
-        "runforge-worker-repo_A-865dc691-20260730T181530Z-p1-aaaa",
-        "runforge-worker-repo_B-97488696-20260730T182011Z-p2-bbbb",
+        "project-00000000000000000000000000000003",
+        "project-00000000000000000000000000000004",
     ]
 
 
+def test_discover_workspaces_finds_a_truncated_project_ending_in_punctuation(tmp_path):
+    workspace = sources_module._reserve_worker_workspace(tmp_path, "a" * 63 + "-extra")
+
+    assert workspace.name.startswith("a" * 63 + "-")
+    assert [item.path for item in discover_workspaces(tmp_path)] == [workspace]
+
+
 def test_discover_workspaces_excludes_a_symlinked_candidate(tmp_path):
-    real_target = tmp_path / "elsewhere" / "runforge-worker-repo_A-865dc691-20260730T181530Z-p1-aaaa"
+    real_target = tmp_path / "elsewhere" / "project-00000000000000000000000000000003"
     real_target.mkdir(parents=True)
-    linked = tmp_path / "runforge-worker-repo_B-97488696-20260730T182011Z-p2-bbbb"
+    linked = tmp_path / "project-00000000000000000000000000000004"
     linked.symlink_to(real_target, target_is_directory=True)
 
     discovered = discover_workspaces(tmp_path)
@@ -48,7 +56,7 @@ def test_discover_workspaces_excludes_a_symlinked_candidate(tmp_path):
 
 
 def test_discover_workspaces_reports_a_readable_manifest(tmp_path):
-    workspace = tmp_path / "runforge-worker-repo_A-865dc691-20260730T181530Z-p1-aaaa"
+    workspace = tmp_path / "project-00000000000000000000000000000003"
     workspace.mkdir()
     _write_worker_manifest(
         workspace,
@@ -66,7 +74,7 @@ def test_discover_workspaces_reports_a_readable_manifest(tmp_path):
 
 
 def test_discover_workspaces_reports_a_missing_manifest_without_failing(tmp_path):
-    workspace = tmp_path / "runforge-worker-legacy-865dc691-20260730T181530Z-p1-aaaa"
+    workspace = tmp_path / "project-00000000000000000000000000000001"
     workspace.mkdir()
 
     (discovered,) = discover_workspaces(tmp_path)
@@ -89,7 +97,7 @@ def test_discover_workspaces_rejects_a_non_directory_root(tmp_path):
 
 
 def test_remove_workspace_deletes_a_plain_directory(tmp_path):
-    workspace = tmp_path / "runforge-worker-source_A-nongit-4f82a1c0-20260730T182011Z-p1-aaaa"
+    workspace = tmp_path / "project-00000000000000000000000000000006"
     workspace.mkdir()
     (workspace / "source").mkdir()
 
@@ -105,7 +113,7 @@ def test_remove_workspace_reports_a_clear_error_for_a_missing_path(tmp_path):
 
 def test_remove_workspace_deregisters_a_git_worktree(tmp_path):
     repository = create_git_repository(tmp_path / "repository", {"train.py": "print('ok')\n"})
-    worktree = tmp_path / "runforge-worker-repository-865dc691-20260730T181530Z-p1-aaaa"
+    worktree = tmp_path / "project-00000000000000000000000000000005"
     commit = git(repository, "rev-parse", "HEAD")
     git(repository, "worktree", "add", "--detach", str(worktree), commit)
     assert worktree.is_dir()
@@ -113,7 +121,7 @@ def test_remove_workspace_deregisters_a_git_worktree(tmp_path):
     remove_workspace(worktree)
 
     assert not worktree.exists()
-    assert "runforge-worker-" not in git(repository, "worktree", "list", "--porcelain")
+    assert str(worktree) not in git(repository, "worktree", "list", "--porcelain")
 
 
 def test_default_workspace_root_uses_the_configured_variable(tmp_path, monkeypatch):

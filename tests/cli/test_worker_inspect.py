@@ -16,7 +16,7 @@ CLI_ERROR_EXIT = 2
 
 
 def _workspace(tmp_path: Path) -> Path:
-    workspace = tmp_path / "runforge-worker-repo_A-865dc691-20260730T181530Z-p4127-a13f"
+    workspace = tmp_path / "project-00000000000000000000000000000002"
     workspace.mkdir()
     manifest = WorkerManifest(
         source_kind="git",
@@ -62,7 +62,7 @@ def test_workspace_listing_leaves_manifest_untouched(tmp_path):
 
 
 def test_workspace_listing_reports_unknown_identity_without_removing_it(tmp_path, capsys):
-    workspace = tmp_path / "runforge-worker-no-manifest"
+    workspace = tmp_path / "project-00000000000000000000000000000001"
     workspace.mkdir()
 
     assert main(["workspaces", str(tmp_path)]) == 0

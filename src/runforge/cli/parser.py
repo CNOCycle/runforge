@@ -14,8 +14,8 @@ from runforge.version import display_version
 
 _WORKSPACE_HELP = (
     "Worker workspace: set RUNFORGE_WORKSPACE_ROOT to an existing writable parent "
-    "before execution. Git defaults to a directory beside the source repository; "
-    "directory-snapshot uses the system temporary directory; verified-directory "
+    "before execution. Git and directory-snapshot default to runforge-workspaces "
+    "beside the recorded source; verified-directory "
     "runs in its original source directory. Example: export "
     "RUNFORGE_WORKSPACE_ROOT=/work/runforge-workspaces. This is separate from the "
     "report root holding saved plans, logs, and artifacts. See the README quick "
