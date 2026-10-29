@@ -99,7 +99,14 @@ def build_parser() -> argparse.ArgumentParser:
         )
         leaf.add_argument("paths", type=Path, nargs="+", metavar="PATH", help="experiment or report-root paths")
         _add_stream_output_argument(leaf)
-        leaf.set_defaults(handler=commands.run, command_name=name, retry=name == "retry", force=False, max_tasks=None)
+        leaf.set_defaults(
+            handler=commands.run,
+            command_name=name,
+            retry=name == "retry",
+            force=False,
+            max_tasks=None,
+            reuse_artifacts=False,
+        )
         if name == "run":
             leaf.add_argument(
                 "-n",
@@ -109,6 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
                 help="successful-completion quota across queue refills (default: unlimited)",
             )
         else:
+            leaf.add_argument(
+                "--reuse-artifacts",
+                action="store_true",
+                help="copy previous artifacts for application checkpoint recovery (default: disabled)",
+            )
             leaf.add_argument(
                 "-f",
                 "--force",
