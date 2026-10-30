@@ -5,7 +5,12 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import runforge
 import runforge.version as package_version
+
+
+def test_exported_package_version_matches_project_metadata():
+    assert runforge.__version__ == package_version._project_version(package_version._source_root())
 
 
 def test_display_version_reads_project_toml_and_appends_git_revision(tmp_path, monkeypatch):
