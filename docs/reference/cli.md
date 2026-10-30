@@ -103,7 +103,7 @@ for costs, limitations, and interrupted preparation.
 | RUNFORGE_ARTIFACT_DIR | Child output-artifact directory, supplied by RunForge. |
 | RUNFORGE_INPUT_DIR | Child immutable input tree, supplied by RunForge. |
 
-Unset workspace configuration uses the existing source-specific defaults.
+Unset workspace configuration uses `runforge-workspaces` beside the recorded source.
 An unusable configured parent fails rather than silently changing location.
 Effective arguments print paths/choices and environment key names, never ambient
 or captured environment values. Each selected task reports its environment keys,

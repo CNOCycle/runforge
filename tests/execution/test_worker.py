@@ -6,7 +6,6 @@ import json
 import os
 import re
 import shutil
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -157,15 +156,15 @@ def test_worker_executes_recorded_commit_and_patch_then_cleans_worktree(tmp_path
     status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
     assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "patched"
     worker_path = Path((experiment / "artifacts" / "worktree.txt").read_text(encoding="utf-8"))
-    assert worker_path.name.startswith("runforge-worker-")
-    assert worker_path.parent == repository.parent
+    assert worker_path.name.startswith("repository-")
+    assert worker_path.parent == repository.parent / "runforge-workspaces"
     assert not worker_path.exists()
     assert status.state == "completed"
     assert status.attempt == 1
     assert status.exit_code == 0
     assert (experiment / "stdout.log").is_file()
     assert (experiment / "stderr.log").is_file()
-    assert "runforge-worker-" not in git(repository, "worktree", "list", "--porcelain")
+    assert str(worker_path) not in git(repository, "worktree", "list", "--porcelain")
 
 
 def test_worker_builds_git_worktree_under_the_configured_root(tmp_path, monkeypatch):
@@ -237,7 +236,7 @@ def test_worker_git_workspace_name_matches_the_naming_contract(tmp_path):
 
     worker_path = Path((experiment / "artifacts" / "worktree.txt").read_text(encoding="utf-8"))
     assert re.fullmatch(
-        rf"runforge-worker-repository-[0-9a-f]{{8}}-\d{{8}}T\d{{6}}Z-p{os.getpid()}-[0-9a-f]{{4}}",
+        r"repository-[0-9a-f]{32}",
         worker_path.name,
     )
 
@@ -301,7 +300,7 @@ def test_worker_git_workspace_name_is_filesystem_safe_for_an_unsafe_repository_n
 
     worker_path = Path((experiment / "artifacts" / "worktree.txt").read_text(encoding="utf-8"))
     assert re.fullmatch(
-        rf"runforge-worker-repo-with-spaces-windows-[0-9a-f]{{8}}-\d{{8}}T\d{{6}}Z-p{os.getpid()}-[0-9a-f]{{4}}",
+        r"repo-with-spaces-windows-[0-9a-f]{32}",
         worker_path.name,
     )
 
@@ -676,14 +675,34 @@ def test_worker_executes_directory_snapshot_source_from_isolated_workspace(tmp_p
     workspace = Path((experiment / "artifacts" / "cwd.txt").read_text(encoding="utf-8"))
     assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "base"
     assert workspace.name == "source"
-    assert workspace.parent.name.startswith("runforge-worker-")
-    # Resolve both sides: Path.cwd() inside the child process may come back
-    # kernel-resolved even when tempfile.gettempdir() itself is not.
-    assert workspace.parent.parent.resolve() == Path(tempfile.gettempdir()).resolve()
+    assert workspace.parent.name.startswith("source-")
+    assert workspace.parent.parent == source.parent / "runforge-workspaces"
     assert not workspace.exists()
     assert status.state == "completed"
     assert status.attempt == 1
     assert status.exit_code == 0
+
+
+def test_snapshot_uses_recorded_source_parent_when_original_is_missing(tmp_path):
+    source = _verified_directory_source(
+        tmp_path,
+        "from pathlib import Path\nimport os\n"
+        "Path(os.environ['RUNFORGE_ARTIFACT_DIR'], 'cwd').write_text(str(Path.cwd()))\n",
+    )
+    experiment = plan_experiment(
+        PlanRequest(
+            name="snapshot-missing-original",
+            command=ExperimentCommand.argv(("python", "train.py")),
+            source_path=source,
+            output_root=tmp_path / "reports",
+            directory_source_mode="directory-snapshot",
+        )
+    )
+    shutil.rmtree(source)
+
+    assert run_experiment(experiment) == 0
+    cwd = Path((experiment / "artifacts" / "cwd").read_text(encoding="utf-8"))
+    assert cwd.parent.parent == tmp_path / "runforge-workspaces"
 
 
 def test_worker_materializes_directory_snapshot_under_the_configured_root(tmp_path, monkeypatch):
@@ -739,7 +758,7 @@ def test_worker_snapshot_workspace_name_matches_the_naming_contract(tmp_path):
 
     workspace = Path((experiment / "artifacts" / "cwd.txt").read_text(encoding="utf-8"))
     assert re.fullmatch(
-        rf"runforge-worker-source-nongit-[0-9a-f]{{8}}-\d{{8}}T\d{{6}}Z-p{os.getpid()}-[0-9a-f]{{4}}",
+        r"source-[0-9a-f]{32}",
         workspace.parent.name,
     )
 

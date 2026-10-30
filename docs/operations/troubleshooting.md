@@ -56,7 +56,7 @@ the plans themselves are published and runnable. The mapping is derived from
 each `config.json`, so nothing is lost permanently. Check disk space and
 permissions on the report root.
 
-## Leftover runforge-worker-* directories
+## Leftover workspace directories
 
 Normal execution removes its temporary workspace after each experiment, including
 ordinary command failures. An abrupt kill, crash, or cleanup error can leave it

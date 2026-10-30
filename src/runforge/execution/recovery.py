@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import shlex
-import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
 from runforge.execution.discovery import DiscoveredExperiment
-from runforge.execution.sources import _configured_workspace_root
+from runforge.execution.sources import workspace_root_for
 from runforge.execution.staleness import assess_claim_liveness
 from runforge.execution.workspace_cleanup import WorkspaceCleanupError, discover_workspaces
 from runforge.infrastructure.claims import ClaimError, load_claim
@@ -103,14 +102,11 @@ def _action_lines(item, claim, liveness) -> list[str]:
 
 
 def _workspace_root(item: DiscoveredExperiment) -> Path | None:
-    configured = _configured_workspace_root()
-    if configured is not None:
-        return configured
     source = item.configuration.source
     if isinstance(source, GitSource):
-        return source.repository.parent
+        return workspace_root_for(source.repository)
     if isinstance(source, DirectorySnapshotSource):
-        return Path(tempfile.gettempdir())
+        return workspace_root_for(source.original_path)
     return None
 
 

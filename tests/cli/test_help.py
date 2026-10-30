@@ -30,7 +30,7 @@ def test_version_flags_need_no_subcommand(capsys):
         with pytest.raises(SystemExit) as raised:
             main([flag])
         assert raised.value.code == 0
-        assert capsys.readouterr().out.startswith("runforge 0.2.0+")
+        assert capsys.readouterr().out.startswith("runforge 0.3.0+")
 
 
 def test_plan_help_preserves_source_input_and_command_contract(capsys):

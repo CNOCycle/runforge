@@ -14,19 +14,19 @@ acquired by creating a directory that must fail for every process but one. If
 that operation is not atomic across hosts, or if the result is cached rather
 than coherent, two workers can both believe they own the same experiment.
 
-Workers must also be able to reach the recorded source path. A Git-backed plan
-records a repository location; a `verified-directory` plan records an absolute
-directory that must exist at the same path on every worker.
+Workers running Git-backed plans must reach the recorded repository. A
+`verified-directory` plan records an absolute directory that must exist at the
+same path on every worker. A `directory-snapshot` plan carries its source in the
+experiment directory, so the original source directory can be absent.
 
 ## Worker Workspace Placement
 
-By default a worker builds its temporary Git worktree next to the source
-repository, and materializes a directory-snapshot source under the OS default
-temporary directory. Set `RUNFORGE_WORKSPACE_ROOT` to use one explicit directory
-instead — useful when the repository's location is read-only or too small to
-hold a worktree, or when the host's default temp directory is a small
-RAM-backed tmpfs. The directory must already exist and be writable by the
-worker; RunForge does not create it, and does not require it to be shared
+By default a worker places Git and directory-snapshot workspaces under a
+`runforge-workspaces` directory beside the recorded source. Set
+`RUNFORGE_WORKSPACE_ROOT` to use one explicit directory instead, for example
+when the source's parent is absent, read-only, or too small. The configured
+directory must already exist and be writable by the worker; RunForge does not
+create it, and does not require it to be shared
 across hosts (each worker still builds and tears down its own private
 workspace there).
 

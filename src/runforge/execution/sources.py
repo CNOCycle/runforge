@@ -18,7 +18,6 @@ import hashlib
 import os
 import shutil
 import socket
-import tempfile
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
@@ -28,7 +27,6 @@ from typing import Generic, Literal, TypeVar
 
 from runforge.execution.errors import WorkerError
 from runforge.infrastructure.claims import ExperimentClaim
-from runforge.infrastructure.clock import utc_compact_timestamp
 from runforge.infrastructure.directory_scan import DirectoryScanError, ScannedFile, scan_directory
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.infrastructure.json_store import JsonStoreError, load_json_object, save_json_object
@@ -54,47 +52,42 @@ WORKSPACE_ROOT_VARIABLE = "RUNFORGE_WORKSPACE_ROOT"
 def _configured_workspace_root() -> Path | None:
     """Resolve the operator-configured worker workspace root, if any.
 
-    One explicitly named variable, mirroring ``RUNFORGE_CLAIM_OWNER``:
-    RunForge never snapshots the ambient environment, and a blank value falls
-    back to each mode's existing default (next to the Git repository, or the
-    OS default temporary location) rather than being treated as configured.
+    A blank value falls back to the root beside the recorded source.
     """
     configured = os.environ.get(WORKSPACE_ROOT_VARIABLE, "").strip()
     return Path(configured).expanduser().resolve() if configured else None
 
 
-WORKSPACE_NAME_PREFIX = "runforge-worker-"
+def workspace_root_for(source_path: Path) -> Path:
+    """Return the configured root or the root beside the recorded source."""
+    return _configured_workspace_root() or source_path.parent / "runforge-workspaces"
+
+
 _WORKSPACE_NAME_ATTEMPTS = 5
 
 
-def _worker_workspace_name(source_slug: str, source_digest8: str, *, non_git: bool) -> str:
-    """Build one descriptive, collision-resistant worker workspace directory name.
-
-    ``runforge-worker-{SOURCE_SLUG}-{SOURCE8}-{UTC_TIMESTAMP}-p{PID}-{NONCE}``,
-    with a literal ``-nongit`` marker after the slug for non-Git sources, so a
-    leftover workspace names the repository or source directory, the commit or
-    content digest, when it started, and which process built it -- an operator
-    no longer has to guess from an opaque hash alone which source produced it.
-
-    ``source_slug`` is an arbitrary repository or source-directory name, not
-    something RunForge controls the characters of, so it is slugified the
-    same way planning derives its own directory names -- otherwise a name
-    like ``repo with spaces`` or ``repo:windows?`` would break the documented
-    filesystem-safe contract.
-    """
-    slug = slugify(source_slug, "source")
-    marker = "-nongit" if non_git else ""
-    nonce = uuid.uuid4().hex[:4]
-    stamp = utc_compact_timestamp()
-    return f"{WORKSPACE_NAME_PREFIX}{slug}{marker}-{source_digest8}-{stamp}-p{os.getpid()}-{nonce}"
+def _worker_workspace_name(project: str) -> str:
+    """Identify the project and a unique execution in the common root."""
+    project_name = slugify(project, "source").rstrip("-._")
+    return f"{project_name}-{uuid.uuid4().hex}"
 
 
-def _reserve_worker_workspace(root: Path | None, source_slug: str, source_digest8: str, *, non_git: bool) -> Path:
+def _prepare_workspace_root(source_path: Path) -> Path:
+    """Create the default root; explicitly configured roots must already exist."""
+    parent = workspace_root_for(source_path)
+    if _configured_workspace_root() is None:
+        try:
+            parent.mkdir(exist_ok=True)
+        except OSError as error:
+            raise WorkerError(f"Could not create worker workspace root {parent}: {error}") from error
+    return parent
+
+
+def _reserve_worker_workspace(parent: Path, project: str) -> Path:
     """Create and return one empty, descriptively-named worker workspace directory."""
-    parent = root if root is not None else Path(tempfile.gettempdir())
     last_error: OSError | None = None
     for _ in range(_WORKSPACE_NAME_ATTEMPTS):
-        candidate = parent / _worker_workspace_name(source_slug, source_digest8, non_git=non_git)
+        candidate = parent / _worker_workspace_name(project)
         try:
             candidate.mkdir(parents=False)
             return candidate
@@ -160,8 +153,7 @@ class GitWorktreePreparation(SourcePreparation[GitSource]):
         except GitOperationError as error:
             raise WorkerError(str(error)) from error
 
-        workspace_root = _configured_workspace_root() or repository.root.parent
-        worktree = _reserve_worker_workspace(workspace_root, repository.root.name, source.commit[:8], non_git=False)
+        worktree = _reserve_worker_workspace(_prepare_workspace_root(repository.root), repository.root.name)
         try:
             repository.create_detached_worktree(worktree, source.commit)
             _write_worker_manifest(
@@ -220,9 +212,7 @@ class DirectorySnapshotPreparation(SourcePreparation[DirectorySnapshotSource]):
             source.tree_digest,
             changed_message="Captured directory-snapshot source has changed since planning",
         )
-        container = _reserve_worker_workspace(
-            _configured_workspace_root(), source.original_path.name, source.tree_digest[:8], non_git=True
-        )
+        container = _reserve_worker_workspace(_prepare_workspace_root(source.original_path), source.original_path.name)
         try:
             _write_worker_manifest(
                 container,

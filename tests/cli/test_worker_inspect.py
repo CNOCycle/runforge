@@ -16,7 +16,7 @@ CLI_ERROR_EXIT = 2
 
 
 def _workspace(tmp_path: Path) -> Path:
-    workspace = tmp_path / "runforge-worker-repo_A-865dc691-20260730T181530Z-p4127-a13f"
+    workspace = tmp_path / "project-00000000000000000000000000000002"
     workspace.mkdir()
     manifest = WorkerManifest(
         source_kind="git",
@@ -49,6 +49,7 @@ def test_workspace_listing_provides_identity_without_separate_inspection(tmp_pat
         "process activity is not verified",
     ):
         assert text in output
+    assert "warning: a matching name alone" not in output
 
 
 def test_workspace_listing_leaves_manifest_untouched(tmp_path):
@@ -62,12 +63,15 @@ def test_workspace_listing_leaves_manifest_untouched(tmp_path):
 
 
 def test_workspace_listing_reports_unknown_identity_without_removing_it(tmp_path, capsys):
-    workspace = tmp_path / "runforge-worker-no-manifest"
+    workspace = tmp_path / "project-00000000000000000000000000000001"
     workspace.mkdir()
 
     assert main(["workspaces", str(tmp_path)]) == 0
 
-    assert "manifest unavailable" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "manifest unavailable" in output
+    assert "a matching name alone does not establish that this is a RunForge workspace" in output
+    assert "verify before removal" in output
     assert workspace.exists()
 
 
@@ -80,7 +84,9 @@ def test_workspace_listing_reports_unsupported_manifest(tmp_path, capsys, field,
 
     assert main(["workspaces", str(tmp_path)]) == 0
 
-    assert "Unsupported worker workspace manifest" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Unsupported worker workspace manifest" in output
+    assert "a matching name alone does not establish that this is a RunForge workspace" in output
     assert workspace.exists()
 
 
