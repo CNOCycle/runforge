@@ -146,8 +146,8 @@ runforge workspaces "$WORKSPACE_ROOT"
 With RUNFORGE_WORKSPACE_ROOT set, plain runforge workspaces uses that parent too.
 When unset, workspace listing scans the current directory; pass the source
 parent's `runforge-workspaces` directory explicitly to inspect default workspaces.
-Legacy workspace formats are not listed. See [workers and recovery](docs/guides/workers-and-recovery.md)
-for leftovers after interrupted execution.
+See [workers and recovery](docs/guides/workers-and-recovery.md) for leftovers
+after interrupted execution.
 
 Run the experiment directory printed by planning on the same or another machine
 with access to the recorded repository:

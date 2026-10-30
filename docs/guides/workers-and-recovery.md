@@ -28,8 +28,7 @@ current workspace parent once: RUNFORGE_WORKSPACE_ROOT when configured, otherwis
 `runforge-workspaces` beside the recorded Git or snapshot source.
 It does not search every disk or a previous container's workspace location.
 Use the explicit checks below for workspaces and experiments outside the selected
-paths. Legacy workspace formats are not listed. Verified-directory execution
-creates no workspace.
+paths. Verified-directory execution creates no workspace.
 
 ```bash
 runforge discover "$REPORT_ROOT"

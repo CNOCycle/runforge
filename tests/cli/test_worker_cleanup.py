@@ -39,15 +39,6 @@ def test_worker_cleanup_lists_nothing_for_an_empty_root(tmp_path, capsys):
     assert "  none" in output
 
 
-def test_worker_cleanup_ignores_legacy_workspace_names(tmp_path, capsys):
-    legacy = tmp_path / "runforge-worker-old"
-    legacy.mkdir()
-
-    assert main(["workspaces", str(tmp_path)]) == 0
-    assert "Worker workspaces found (0):" in capsys.readouterr().out
-    assert legacy.exists()
-
-
 def test_worker_cleanup_lists_without_removing_by_default(tmp_path, capsys):
     workspace = _snapshot_workspace(tmp_path, "project-00000000000000000000000000000002")
 

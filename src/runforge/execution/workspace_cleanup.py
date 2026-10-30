@@ -40,10 +40,9 @@ class WorkspaceCleanupError(RuntimeError):
 class DiscoveredWorkspace:
     """One candidate leftover worker workspace directory.
 
-    ``manifest`` is ``None`` when the workspace predates Stage 5.2, or its
-    manifest could not be read; ``manifest_error`` then explains why. Absence
-    of a manifest never excludes a workspace from discovery or removal --
-    both are still name-driven, not manifest-driven.
+    ``manifest`` is ``None`` when the manifest is missing or unreadable;
+    ``manifest_error`` then explains why. Absence of a manifest never excludes
+    a workspace from discovery or removal -- both are name-driven.
     """
 
     path: Path
