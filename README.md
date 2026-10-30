@@ -33,20 +33,6 @@ artifacts.
 [Guides, reference, architecture, and operations](docs/README.md) — start here
 once you have run your first experiment.
 
-## Project Structure
-
-```text
-src/runforge/
-  cli/             # parser construction, requests, output, dispatch
-  schemas/         # versioned experiment and source data contracts
-  planning/        # matrix expansion and plan publication
-  execution/       # discovery, retry, and worker execution
-  infrastructure/  # storage, Git, directory scanning, JSON, claims, and clock
-```
-
-Dependencies flow `cli -> planning/execution -> schemas/infrastructure`. See
-[Architecture and workflows](docs/architecture/architecture-and-workflows.md).
-
 ## Install
 
 From this project root:
@@ -67,8 +53,7 @@ equivalent entry point.
 ## Quick Start
 
 Choose the source repository and a persistent report root explicitly. If
-`--out-dir` is omitted, RunForge uses `$REPO/reports` by default. Before execution,
-you can also [choose where workers run](#choose-where-workers-run).
+`--out-dir` is omitted, RunForge uses `$REPO/reports` by default.
 
 ```bash
 REPO=/path/to/your-project
@@ -93,6 +78,22 @@ Planning confirms where the experiment plan was created:
 Experiment plan created at: $REPO/reports/main/01234567_baseline_0000
 ```
 
+Run the experiment directory printed by planning on the same or another machine
+with access to the recorded repository:
+
+```bash
+runforge run "$REPO/reports/main/01234567_baseline_0000"
+```
+
+After the run, inspect `status.json`, `stdout.log`, and `stderr.log` in the
+experiment directory. The example directs the command's output to its
+`artifacts/` subdirectory. RunForge creates a temporary workspace automatically; see
+[where workers run](#choose-where-workers-run) to change its location.
+
+Execution returns 0 for no selected failure, 1 for command failure, or 2 for
+CLI/discovery errors. The child's exact exit code remains in `status.json` and
+logs. Successful skips do not assert that a target completed.
+
 The directory name follows this rule:
 
 ```text
@@ -109,56 +110,6 @@ $REPO/reports/main/01234567_baseline_0000
 `NAME_SLUG` comes from `--name`, with unsafe path characters replaced by `-`.
 `COUNT` starts at `0` and increments when a matching experiment directory already
 exists.
-
-### Choose where workers run
-
-Workers need a directory in which to execute your source. The default depends
-on the source mode:
-
-| Source mode | Default working directory |
-| --- | --- |
-| current-head / pinned-git | A workdir under `runforge-workspaces` beside the repository, e.g. `/work/runforge-workspaces/project-<unique-id>` for `/work/project`. |
-| directory-snapshot | A captured source copy under the same sibling `runforge-workspaces` root. |
-| verified-directory | The original source directory; no temporary workspace is created. |
-
-To put Git and snapshot workspaces in one location of your choice, create a
-writable parent and set RUNFORGE_WORKSPACE_ROOT in the shell that starts workers:
-
-```bash
-WORKSPACE_ROOT=/path/to/runforge-workspaces
-mkdir -p "$WORKSPACE_ROOT"
-export RUNFORGE_WORKSPACE_ROOT="$WORKSPACE_ROOT"
-```
-
-This setting applies to run, retry, and launch. It controls temporary working
-copies; --out-dir / REPORT_ROOT controls saved plans, logs, and artifacts.
-Set it on each worker machine or container before execution, rather than in a
-plan's --env-file, which supplies the child command's environment. Changing it
-affects future workspaces and does not move existing ones. verified-directory
-continues to execute in its original source directory.
-
-Inspect the chosen workspace parent with:
-
-```bash
-runforge workspaces "$WORKSPACE_ROOT"
-```
-
-With RUNFORGE_WORKSPACE_ROOT set, plain runforge workspaces uses that parent too.
-When unset, workspace listing scans the current directory; pass the source
-parent's `runforge-workspaces` directory explicitly to inspect default workspaces.
-See [workers and recovery](docs/guides/workers-and-recovery.md) for leftovers
-after interrupted execution.
-
-Run the experiment directory printed by planning on the same or another machine
-with access to the recorded repository:
-
-```bash
-runforge run "$REPO/reports/main/01234567_baseline_0000"
-```
-
-Execution returns 0 for no selected failure, 1 for command failure, or 2 for
-CLI/discovery errors. The child's exact exit code remains in status.json and
-logs. Successful skips do not assert that a target completed.
 
 To create the plan and run it immediately in the foreground, use `launch` with
 the same options accepted by `plan`:
@@ -229,41 +180,23 @@ An `inprogress` or claimed experiment requires `--force` after you have
 confirmed the original process stopped. See
 [Workers and recovery](docs/guides/workers-and-recovery.md).
 
-## Pinned Git Source
-
-Plan from an explicit commit or ref rather than the current checkout:
-
-```bash
-runforge plan --name release-baseline --out-dir "$REPORT_ROOT" --source-path "$REPO" --source-mode pinned-git --commit v1.2.0 -- python train.py --output '{ARTIFACT_DIR}'
-```
-
-See [Source modes](docs/reference/source-modes.md) for all four modes.
-
 ## Parameter Matrices
 
 Expand one source and command template into an independent experiment directory
 per parameter combination:
 
 ```bash
-runforge plan --name sweep --matrix matrix.json --out-dir "$REPORT_ROOT" --source-path "$REPO" -- python train.py --lr '{LR}' --output '{ARTIFACT_DIR}'
+runforge plan \
+  --name sweep \
+  --matrix matrix.json \
+  --out-dir "$REPORT_ROOT" \
+  --source-path "$REPO" \
+  -- python train.py --lr '{LR}' --output '{ARTIFACT_DIR}'
 ```
 
 Planning prints a table relating each directory to its parameters and saves it
 beside them as a JSON artifact, which `runforge mapping PATH` renders later.
 See [Matrices and mapping](docs/guides/matrices-and-mapping.md).
-
-## Non-Git Directory Sources
-
-Two modes plan a plain directory rather than a Git repository.
-`verified-directory` executes the original in place and re-verifies it before
-every run; `directory-snapshot` captures a self-contained copy. Both require
-`--out-dir` to resolve outside `--source-path`.
-
-```bash
-runforge plan --name ablation --source-mode directory-snapshot --source-path /work/study --out-dir /work/study-reports -- python train.py --output '{ARTIFACT_DIR}'
-```
-
-See [Non-Git directory sources](docs/guides/non-git-sources.md).
 
 ## Discover Planned Experiments
 
@@ -287,6 +220,40 @@ runforge run "$REPORT_ROOT"
 See [Workers and recovery](docs/guides/workers-and-recovery.md) for the summary
 counts, exit codes, and recovery of interrupted runs.
 
+## Pinned Git Source
+
+Plan from an explicit commit or ref rather than the current checkout:
+
+```bash
+runforge plan \
+  --name release-baseline \
+  --out-dir "$REPORT_ROOT" \
+  --source-path "$REPO" \
+  --source-mode pinned-git \
+  --commit v1.2.0 \
+  -- python train.py --output '{ARTIFACT_DIR}'
+```
+
+See [Source modes](docs/reference/source-modes.md) for all four modes.
+
+## Non-Git Directory Sources
+
+Two modes plan a plain directory rather than a Git repository.
+`verified-directory` executes the original in place and re-verifies it before
+every run; `directory-snapshot` captures a self-contained copy. Both require
+`--out-dir` to resolve outside `--source-path`.
+
+```bash
+runforge plan \
+  --name ablation \
+  --source-mode directory-snapshot \
+  --source-path /work/study \
+  --out-dir /work/study-reports \
+  -- python train.py --output '{ARTIFACT_DIR}'
+```
+
+See [Non-Git directory sources](docs/guides/non-git-sources.md).
+
 ## Where To Save Results
 
 Use a project-specific report root so experiment directories are easy to trace
@@ -301,6 +268,42 @@ mix reports from unrelated projects. Pass `{ARTIFACT_DIR}` to your command, or
 read `RUNFORGE_ARTIFACT_DIR`, so outputs land inside the planned experiment
 artifact directory.
 
+## Choose where workers run
+
+By default, `current-head`, `pinned-git`, and `directory-snapshot` create a
+temporary workspace under `runforge-workspaces` beside the source directory.
+For example, the workspace for `/work/project` is created under
+`/work/runforge-workspaces`. The `verified-directory` mode runs directly in the
+original source directory and does not create a temporary workspace.
+
+To put Git and snapshot workspaces in one location of your choice, create a
+writable parent and set `RUNFORGE_WORKSPACE_ROOT` in the shell that starts workers:
+
+```bash
+WORKSPACE_ROOT=/path/to/runforge-workspaces
+mkdir -p "$WORKSPACE_ROOT"
+export RUNFORGE_WORKSPACE_ROOT="$WORKSPACE_ROOT"
+```
+
+This setting applies to `run`, `retry`, and `launch`. It controls temporary working
+copies; `--out-dir` / `REPORT_ROOT` controls saved plans, logs, and artifacts.
+Set it on each worker machine or container before execution, rather than in a
+plan's `--env-file`, which supplies the child command's environment. Changing it
+affects future workspaces and does not move existing ones. `verified-directory`
+continues to execute in its original source directory.
+
+Inspect the chosen workspace parent with:
+
+```bash
+runforge workspaces "$WORKSPACE_ROOT"
+```
+
+With `RUNFORGE_WORKSPACE_ROOT` set, plain `runforge workspaces` uses that parent too.
+When unset, workspace listing scans the current directory; pass the source
+parent's `runforge-workspaces` directory explicitly to inspect default workspaces.
+See [workers and recovery](docs/guides/workers-and-recovery.md) for leftovers
+after interrupted execution.
+
 ## Pipelines And `{ARTIFACT_DIR}`
 
 Keep long or multi-step commands in a tracked wrapper script and write output
@@ -314,7 +317,11 @@ When a program is driven by JSON, YAML, or INI files rather than flags, capture
 that directory as immutable per-experiment inputs:
 
 ```bash
-runforge launch --name train-evaluate --source-path "$REPO" --input-tree "$REPO/configs" -- python run_pipeline.py '{INPUT_DIR}/train.json' '{INPUT_DIR}/eval.json'
+runforge launch \
+  --name train-evaluate \
+  --source-path "$REPO" \
+  --input-tree "$REPO/configs" \
+  -- python run_pipeline.py '{INPUT_DIR}/train.json' '{INPUT_DIR}/eval.json'
 ```
 
 See [Planned configuration inputs](docs/guides/planned-configuration-inputs.md).
@@ -326,7 +333,12 @@ Most runs can skip this. Pass explicit machine-specific values with
 environment is never serialized.
 
 ```bash
-runforge plan --name gpu-baseline --out-dir "$REPORT_ROOT" --source-path "$REPO" --env-file runforge.env -- python train.py --output '{ARTIFACT_DIR}'
+runforge plan \
+  --name gpu-baseline \
+  --out-dir "$REPORT_ROOT" \
+  --source-path "$REPO" \
+  --env-file runforge.env \
+  -- python train.py --output '{ARTIFACT_DIR}'
 ```
 
 See [Dynamic environment variables](docs/guides/dynamic-environment-variables.md)
@@ -355,6 +367,20 @@ environment overrides, and rendered configuration inputs. It does not capture
 untracked file contents, the ambient environment, your data, or your Python
 environment. See
 [Reproducibility boundary](docs/reference/reproducibility-boundary.md).
+
+## Project Structure
+
+```text
+src/runforge/
+  cli/             # parser construction, requests, output, dispatch
+  schemas/         # versioned experiment and source data contracts
+  planning/        # matrix expansion and plan publication
+  execution/       # discovery, retry, and worker execution
+  infrastructure/  # storage, Git, directory scanning, JSON, claims, and clock
+```
+
+Dependencies flow `cli -> planning/execution -> schemas/infrastructure`. See
+[Architecture and workflows](docs/architecture/architecture-and-workflows.md).
 
 ## License
 
