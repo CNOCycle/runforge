@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from runforge.infrastructure.storage import ExperimentDirectory
-from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
+from runforge.schemas.experiment import (
+    ExperimentCommand,
+    ExperimentConfiguration,
+    ExperimentSchemaError,
+    ExperimentStatus,
+)
 from runforge.schemas.inputs import PlannedInput, PlannedInputManifest
 from runforge.schemas.source import GitSource
 
@@ -47,3 +56,26 @@ def test_experiment_directory_centralizes_paths_and_metadata_round_trip(tmp_path
     assert layout.claim_file == layout.root / "claim/owner.json"
     assert layout.source_file("git.patch") == layout.git_patch_file
     assert layout.load_input_manifest() == manifest
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_load_metadata_rejects_old_configuration_versions(tmp_path, version):
+    layout = ExperimentDirectory.resolve(tmp_path / "experiment")
+    configuration = ExperimentConfiguration(
+        experiment_id="experiment",
+        name="layout",
+        command=ExperimentCommand.argv(("python", "train.py")),
+        environment={},
+        source=GitSource(repository=tmp_path.resolve(), commit="a" * 40, branch="main"),
+        created_at="2026-01-01T00:00:00Z",
+    )
+    layout.save_configuration(configuration)
+    layout.save_status(ExperimentStatus(state="created", attempt=0, updated_at="2026-01-01T00:00:00Z"))
+    payload = configuration.to_dict()
+    payload["schema_version"] = version
+    if version == 1:
+        payload.pop("parameters")
+    layout.configuration_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ExperimentSchemaError, match=f"Unsupported configuration schema version: {version}"):
+        layout.load_metadata()
