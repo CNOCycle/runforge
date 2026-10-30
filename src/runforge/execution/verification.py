@@ -28,7 +28,7 @@ def verify_planned_inputs(experiment: ExperimentDirectory) -> None:
 
 
 def _load_planned_input_manifest(experiment: ExperimentDirectory):
-    """Load one planned-input manifest or recognize a legacy plan without inputs."""
+    """Load the manifest, or recognize a plan without optional inputs."""
     manifest_exists = experiment.input_manifest_file.exists()
     inputs_exists = experiment.inputs.exists()
     if not manifest_exists and not inputs_exists:

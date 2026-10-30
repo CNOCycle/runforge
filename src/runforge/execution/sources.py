@@ -250,7 +250,7 @@ def preparation_for(source: object) -> SourcePreparation:
     """Select the preparation for one recorded source kind.
 
     Non-Git sources are matched explicitly so they can never fall through to
-    Git repository operations, which is the dispatch rule Milestone 3 requires.
+    Git repository operations.
     """
     for source_type, preparation in _PREPARATIONS:
         if isinstance(source, source_type):

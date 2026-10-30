@@ -1,4 +1,4 @@
-"""End-to-end differences between the independently runnable CLI candidates."""
+"""End-to-end tests of the CLI contract."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ def test_hold_and_release_change_future_execution_without_changing_inputs(tmp_pa
     assert ExperimentDirectory.resolve(experiment).load_status().attempt == 1
 
 
-def test_launch_failure_uses_candidate_exit_contract_but_records_child_code(tmp_path, capsys):
+def test_launch_failure_uses_aggregate_exit_contract_but_records_child_code(tmp_path, capsys):
     repository = create_git_repository(tmp_path / "repository", {"train.py": "raise SystemExit(7)\n"})
 
     result = main(
@@ -107,7 +107,7 @@ def test_matrix_child_tokens_are_recorded_literally_and_never_executed(tmp_path,
         assert not (configuration.parent / "stdout.log").exists()
 
 
-def test_repeated_completed_run_has_candidate_specific_skip_contract(tmp_path, capsys):
+def test_repeated_completed_run_has_skip_contract(tmp_path, capsys):
     experiment = _plan(tmp_path, capsys)
     assert main(["run", str(experiment)]) == 0
     before = (experiment / "status.json").read_bytes()

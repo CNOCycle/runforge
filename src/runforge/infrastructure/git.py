@@ -1,4 +1,4 @@
-"""Small, testable Git operations used by later RunForge stages."""
+"""Small, testable Git operations used by RunForge."""
 
 from __future__ import annotations
 

@@ -61,7 +61,7 @@ class SemanticDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build candidate F's eight explicit, flat operation selectors."""
+    """Build the eight explicit, flat operation selectors."""
     parser = argparse.ArgumentParser(
         prog="runforge",
         description="Plan, inspect, and run reproducible Git-backed and non-Git experiments.",

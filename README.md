@@ -1,6 +1,6 @@
 # RunForge
 
-This checkout implements candidate F. Priority controls are deferred.
+Priority controls are deferred.
 Use runforge run to process a report root with lazy queue refill, and
 runforge schedule --hold / runforge schedule --release to control pending work.
 The complete canonical interface and exit behavior are in the

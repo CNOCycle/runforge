@@ -87,7 +87,7 @@ class ExperimentCommand:
     def render_placeholders(self, values: Mapping[str, str]) -> ExperimentCommand:
         """Return a copy with exact ``{KEY}`` placeholders replaced.
 
-        The future planner owns value selection and calls this after allocating
+        The planner owns value selection and calls this after allocating
         the artifact directory, for example with ``{"ARTIFACT_DIR": path}``.
         """
         replacements: dict[str, str] = {}

@@ -73,6 +73,7 @@ See [Matrices and mapping](../guides/matrices-and-mapping.md).
 The immutable files are the experiment's identity. A worker verifies every
 planned input digest and, for non-Git modes, the complete source manifest before
 starting the command; a mismatch is a failure, not a silent change.
+RunForge reads configuration schema version 3 and status schema version 1.
 
 ## Lifecycle
 
