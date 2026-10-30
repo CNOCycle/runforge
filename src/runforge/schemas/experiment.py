@@ -20,7 +20,6 @@ from runforge.schemas.validation import (
 
 _PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")
 EXPERIMENT_SCHEMA_VERSION = 1
-_PARAMETER_STRING_SCHEMA_VERSION = 2
 _CONFIGURATION_SCHEMA_VERSION = 3
 _STATUS_STATES = frozenset({"created", "init", "inprogress", "completed", "failed"})
 
@@ -88,7 +87,7 @@ class ExperimentCommand:
     def render_placeholders(self, values: Mapping[str, str]) -> ExperimentCommand:
         """Return a copy with exact ``{KEY}`` placeholders replaced.
 
-        The future planner owns value selection and calls this after allocating
+        The planner owns value selection and calls this after allocating
         the artifact directory, for example with ``{"ARTIFACT_DIR": path}``.
         """
         replacements: dict[str, str] = {}
@@ -173,15 +172,19 @@ class ExperimentConfiguration:
         """Decode one exact supported configuration object."""
         data = require_object(value, "configuration", ExperimentSchemaError)
         schema_version = data.get("schema_version")
-        if schema_version not in {
-            EXPERIMENT_SCHEMA_VERSION,
-            _PARAMETER_STRING_SCHEMA_VERSION,
-            _CONFIGURATION_SCHEMA_VERSION,
-        }:
+        if schema_version != _CONFIGURATION_SCHEMA_VERSION:
             raise ExperimentSchemaError(f"Unsupported configuration schema version: {schema_version!r}")
-        fields = {"kind", "schema_version", "experiment_id", "name", "command", "environment", "source", "created_at"}
-        if schema_version in {_PARAMETER_STRING_SCHEMA_VERSION, _CONFIGURATION_SCHEMA_VERSION}:
-            fields.add("parameters")
+        fields = {
+            "kind",
+            "schema_version",
+            "experiment_id",
+            "name",
+            "command",
+            "environment",
+            "source",
+            "created_at",
+            "parameters",
+        }
         require_exact_fields(
             data,
             fields,
@@ -197,15 +200,7 @@ class ExperimentConfiguration:
             environment=require_string_mapping(data["environment"], "environment", ExperimentSchemaError),
             source=_decode_source(data["source"]),
             created_at=require_text(data["created_at"], "created_at", ExperimentSchemaError),
-            parameters=(
-                (
-                    require_string_mapping(data["parameters"], "parameters", ExperimentSchemaError)
-                    if schema_version == _PARAMETER_STRING_SCHEMA_VERSION
-                    else require_json_scalar_mapping(data["parameters"], "parameters", ExperimentSchemaError)
-                )
-                if schema_version in {_PARAMETER_STRING_SCHEMA_VERSION, _CONFIGURATION_SCHEMA_VERSION}
-                else {}
-            ),
+            parameters=require_json_scalar_mapping(data["parameters"], "parameters", ExperimentSchemaError),
         )
 
 

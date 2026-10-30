@@ -61,7 +61,7 @@ class SemanticDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build candidate F's eight explicit, flat operation selectors."""
+    """Build the eight explicit, flat operation selectors."""
     parser = argparse.ArgumentParser(
         prog="runforge",
         description="Plan, inspect, and run reproducible Git-backed and non-Git experiments.",
@@ -159,7 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=SemanticDefaultsHelpFormatter,
     )
     leaf.add_argument("artifact", type=Path)
-    leaf.set_defaults(handler=commands.matrix_show, command_name="mapping")
+    leaf.set_defaults(handler=commands.mapping, command_name="mapping")
     leaf = leaves.add_parser(
         "schedule",
         help="hold or release pending work without changing execution history",
@@ -192,7 +192,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="WORKSPACE",
         help="exact discovered workspaces to remove (default: list only, remove nothing)",
     )
-    leaf.set_defaults(handler=commands.workspace_cleanup, command_name="workspaces")
+    leaf.set_defaults(handler=commands.workspaces, command_name="workspaces")
     return parser
 
 

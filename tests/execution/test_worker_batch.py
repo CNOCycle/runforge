@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -27,7 +28,7 @@ def _plan(tmp_path: Path, name: str, script: str):
     return plan_experiment(
         PlanRequest(
             name=name,
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
@@ -151,7 +152,7 @@ def test_two_process_workers_execute_one_experiment_at_most_once(tmp_path):
     experiment = plan_experiment(
         PlanRequest(
             name="race",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
@@ -179,7 +180,7 @@ def test_worker_skips_experiment_that_becomes_non_runnable_after_claim(tmp_path)
     first = plan_experiment(
         PlanRequest(
             name="first",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
@@ -187,7 +188,7 @@ def test_worker_skips_experiment_that_becomes_non_runnable_after_claim(tmp_path)
     second = plan_experiment(
         PlanRequest(
             name="second",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )

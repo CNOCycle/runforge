@@ -1,4 +1,4 @@
-"""Generic atomic JSON-object persistence for later RunForge stages."""
+"""Generic atomic JSON-object persistence for RunForge."""
 
 from __future__ import annotations
 

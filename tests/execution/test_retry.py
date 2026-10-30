@@ -33,7 +33,7 @@ def _experiment(tmp_path: Path, script: str = "print('done')\n") -> Path:
     return plan_experiment(
         PlanRequest(
             name="retry",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )

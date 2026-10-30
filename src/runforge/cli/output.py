@@ -132,11 +132,9 @@ def print_planning_arguments(
     print_effective_arguments(getattr(arguments, "command_name", arguments.subcommand), rows)
 
 
-def print_matrix_show_arguments(arguments: argparse.Namespace) -> None:
+def print_mapping_arguments(arguments: argparse.Namespace) -> None:
     """Print the effective artifact path for read-only mapping inspection."""
-    print_effective_arguments(
-        getattr(arguments, "command_name", "matrix-show"), [("artifact", path_text(arguments.artifact))]
-    )
+    print_effective_arguments("mapping", [("artifact", path_text(arguments.artifact))])
 
 
 def print_matrix_mapping_file(path: Path) -> None:
@@ -146,12 +144,10 @@ def print_matrix_mapping_file(path: Path) -> None:
     print_matrix_mapping(mapping)
 
 
-def print_worker_cleanup_arguments(arguments: argparse.Namespace, root: Path) -> None:
+def print_workspaces_arguments(arguments: argparse.Namespace, root: Path) -> None:
     """Print the effective scan root and confirmation targets for workspace cleanup."""
     confirm = "not set (list only)" if arguments.confirm is None else ", ".join(path_text(p) for p in arguments.confirm)
-    print_effective_arguments(
-        getattr(arguments, "command_name", "worker-cleanup"), [("root", path_text(root)), ("confirm", confirm)]
-    )
+    print_effective_arguments("workspaces", [("root", path_text(root)), ("confirm", confirm)])
 
 
 def print_discovered_workspaces(discovered: Sequence[DiscoveredWorkspace]) -> None:

@@ -28,7 +28,7 @@ def _snapshot_workspace(tmp_path: Path, name: str) -> Path:
     return workspace
 
 
-def test_worker_cleanup_lists_nothing_for_an_empty_root(tmp_path, capsys):
+def test_workspaces_lists_nothing_for_an_empty_root(tmp_path, capsys):
     assert main(["workspaces", str(tmp_path)]) == 0
 
     output = capsys.readouterr().out
@@ -39,7 +39,7 @@ def test_worker_cleanup_lists_nothing_for_an_empty_root(tmp_path, capsys):
     assert "  none" in output
 
 
-def test_worker_cleanup_lists_without_removing_by_default(tmp_path, capsys):
+def test_workspaces_lists_without_removing_by_default(tmp_path, capsys):
     workspace = _snapshot_workspace(tmp_path, "project-00000000000000000000000000000002")
 
     assert main(["workspaces", str(tmp_path)]) == 0
@@ -52,7 +52,7 @@ def test_worker_cleanup_lists_without_removing_by_default(tmp_path, capsys):
     assert workspace.exists()
 
 
-def test_worker_cleanup_removes_only_the_confirmed_workspace(tmp_path, capsys):
+def test_workspaces_removes_only_the_confirmed_workspace(tmp_path, capsys):
     keep = _snapshot_workspace(tmp_path, "project-00000000000000000000000000000002")
     remove = _snapshot_workspace(tmp_path, "project-00000000000000000000000000000003")
 
@@ -64,7 +64,7 @@ def test_worker_cleanup_removes_only_the_confirmed_workspace(tmp_path, capsys):
     assert not remove.exists()
 
 
-def test_worker_cleanup_deregisters_a_confirmed_git_worktree(tmp_path, capsys):
+def test_workspaces_deregisters_a_confirmed_git_worktree(tmp_path, capsys):
     repository = create_git_repository(tmp_path / "repository", {"train.py": "print('ok')\n"})
     worktree = tmp_path / "project-00000000000000000000000000000001"
     commit = git(repository, "rev-parse", "HEAD")
@@ -79,7 +79,7 @@ def test_worker_cleanup_deregisters_a_confirmed_git_worktree(tmp_path, capsys):
     assert str(worktree) not in git(repository, "worktree", "list", "--porcelain")
 
 
-def test_worker_cleanup_rejects_a_confirm_path_discovery_did_not_find(tmp_path, capsys):
+def test_workspaces_rejects_a_confirm_path_discovery_did_not_find(tmp_path, capsys):
     kept = _snapshot_workspace(tmp_path, "project-00000000000000000000000000000002")
     unrelated = tmp_path / "not-discovered"
     unrelated.mkdir()
@@ -91,13 +91,13 @@ def test_worker_cleanup_rejects_a_confirm_path_discovery_did_not_find(tmp_path, 
     assert unrelated.exists()
 
 
-def test_worker_cleanup_rejects_a_missing_root(tmp_path, capsys):
+def test_workspaces_rejects_a_missing_root(tmp_path, capsys):
     assert main(["workspaces", str(tmp_path / "does-not-exist")]) == CLI_ERROR_EXIT
 
     assert "does not exist" in capsys.readouterr().err
 
 
-def test_worker_cleanup_defaults_the_root_to_the_configured_variable(tmp_path, monkeypatch, capsys):
+def test_workspaces_defaults_the_root_to_the_configured_variable(tmp_path, monkeypatch, capsys):
     workspace = _snapshot_workspace(tmp_path, "project-00000000000000000000000000000002")
     monkeypatch.setenv(WORKSPACE_ROOT_VARIABLE, str(tmp_path))
 

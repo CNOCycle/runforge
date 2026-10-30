@@ -1,8 +1,8 @@
-# CLI reference: candidate F
+# CLI reference
 
 RunForge publishes immutable experiment plans, executes them under atomic claims,
-and keeps report history separate from temporary workspaces. This candidate is
-an independent whole-interface alternative. Priority controls are deferred.
+and keeps report history separate from temporary workspaces. Priority controls
+are deferred.
 
 ## Canonical operations
 
@@ -19,7 +19,6 @@ an independent whole-interface alternative. Priority controls are deferred.
 
 Global -h/--help and -v/--version require no experiment execution. Family help
 and leaf help describe their own required arguments and semantic defaults.
-No legacy command adapters are supplied in these greenfield alternatives.
 
 ## Common workflows
 
@@ -74,7 +73,7 @@ an attempted command failed; 2 means invalid metadata or a CLI/domain error.
 Invalid metadata takes precedence over failure. Detailed child codes are stored
 in status.json. Completed work is not rerun and retries are explicit.
 
-F launch/run/retry all use the aggregate contract. run/retry require explicit
+launch/run/retry all use the aggregate contract. run/retry require explicit
 paths; an empty or missing input path is an error before any execution. Paths are
 unioned and deduplicated. Force retry requires every explicit argument to be an
 experiment directory; bulk forced root recovery is refused.

@@ -42,7 +42,7 @@ def test_argument_command_and_configuration_round_trip(tmp_path):
     assert decoded.command.to_dict() == {"mode": "argv", "arguments": ["python", "train.py", "--out", "{ARTIFACT_DIR}"]}
 
 
-def test_configuration_records_matrix_parameters_and_decodes_schema_version_one(tmp_path):
+def test_configuration_records_matrix_parameters(tmp_path):
     configuration = replace(
         _configuration(tmp_path, ExperimentCommand.argv(("python", "train.py"))),
         parameters={"LR": 0.01, "SEED": 2, "AMP": False},
@@ -53,14 +53,18 @@ def test_configuration_records_matrix_parameters_and_decodes_schema_version_one(
     assert payload["parameters"] == {"LR": 0.01, "SEED": 2, "AMP": False}
     assert ExperimentConfiguration.from_dict(payload) == configuration
 
-    legacy = dict(payload)
-    legacy["schema_version"] = 2
-    legacy["parameters"] = {"LR": "0.01"}
-    assert ExperimentConfiguration.from_dict(legacy).parameters == {"LR": "0.01"}
 
-    legacy["schema_version"] = 1
-    legacy.pop("parameters")
-    assert ExperimentConfiguration.from_dict(legacy).parameters == {}
+@pytest.mark.parametrize("version", [1, 2])
+def test_configuration_rejects_unsupported_versions(tmp_path, version):
+    payload = _configuration(tmp_path, ExperimentCommand.argv(("python", "train.py"))).to_dict()
+    payload["schema_version"] = version
+    if version == 1:
+        payload.pop("parameters")
+    else:
+        payload["parameters"] = {"LR": "0.01"}
+
+    with pytest.raises(ExperimentSchemaError, match=f"Unsupported configuration schema version: {version}"):
+        ExperimentConfiguration.from_dict(payload)
 
 
 def test_shell_pipeline_template_renders_artifact_dir_without_mutating_template(tmp_path):

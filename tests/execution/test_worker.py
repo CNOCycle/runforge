@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -44,7 +45,7 @@ def test_executor_rejects_an_already_claimed_experiment(tmp_path):
     experiment = plan_experiment(
         PlanRequest(
             name="claimed",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             output_root=tmp_path / "reports",
             source_path=repository,
         )
@@ -64,7 +65,7 @@ def test_executor_reports_claim_release_warning_without_console_output(tmp_path,
     experiment = plan_experiment(
         PlanRequest(
             name="release-failure",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             output_root=tmp_path / "reports",
             source_path=repository,
         )
@@ -91,7 +92,7 @@ def test_executor_preserves_original_failure_when_a_claim_cannot_be_released(tmp
     experiment = plan_experiment(
         PlanRequest(
             name="masked-failure",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             output_root=tmp_path / "reports",
             source_path=repository,
         )
@@ -118,7 +119,7 @@ def test_executor_releases_its_claim_after_execution(tmp_path):
     experiment = plan_experiment(
         PlanRequest(
             name="released",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             output_root=tmp_path / "reports",
             source_path=repository,
         )
@@ -144,7 +145,7 @@ def test_worker_executes_recorded_commit_and_patch_then_cleans_worktree(tmp_path
     experiment = plan_experiment(
         PlanRequest(
             name="patched",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
@@ -183,7 +184,7 @@ def test_worker_builds_git_worktree_under_the_configured_root(tmp_path, monkeypa
     experiment = plan_experiment(
         PlanRequest(
             name="configured-root",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
@@ -203,7 +204,7 @@ def test_worker_reports_a_clear_error_for_an_unusable_configured_root(tmp_path, 
     experiment = plan_experiment(
         PlanRequest(
             name="bad-root",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
@@ -226,7 +227,7 @@ def test_worker_git_workspace_name_matches_the_naming_contract(tmp_path):
     experiment = plan_experiment(
         PlanRequest(
             name="naming",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
@@ -256,7 +257,7 @@ def test_worker_git_workspace_manifest_records_source_and_claim_identity(tmp_pat
     experiment = plan_experiment(
         PlanRequest(
             name="manifest",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
@@ -290,7 +291,7 @@ def test_worker_git_workspace_name_is_filesystem_safe_for_an_unsafe_repository_n
     experiment = plan_experiment(
         PlanRequest(
             name="unsafe-name",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
@@ -322,7 +323,7 @@ def test_worker_executes_pinned_commit_after_current_checkout_advances(tmp_path)
     experiment = plan_experiment(
         PlanRequest(
             name="pinned",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             output_root=tmp_path / "reports",
             source=PinnedGitSource(repository=repository, commit=first_commit),
         )
@@ -350,7 +351,7 @@ def test_worker_verifies_inputs_and_exposes_the_input_directory(tmp_path):
     experiment = plan_experiment(
         PlanRequest(
             name="inputs",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
             inputs=(InputTemplate(path="config.json", kind="copy", content="configured\n"),),
@@ -375,7 +376,7 @@ def test_worker_rejects_mutated_planned_inputs_before_execution(tmp_path, mutati
     experiment = plan_experiment(
         PlanRequest(
             name="invalid inputs",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
             inputs=(InputTemplate(path="config.json", kind="copy", content="configured\n"),),
@@ -399,7 +400,7 @@ def test_worker_records_nonzero_command_exit(tmp_path):
     experiment = plan_experiment(
         PlanRequest(
             name="failure",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
@@ -422,7 +423,7 @@ def test_worker_streams_output_to_console_and_preserves_logs(tmp_path, capsys):
     experiment = plan_experiment(
         PlanRequest(
             name="streamed",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
@@ -442,7 +443,7 @@ def test_worker_reports_successful_lifecycle_without_changing_its_result(tmp_pat
     experiment = plan_experiment(
         PlanRequest(
             name="progress",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
@@ -456,7 +457,7 @@ def test_worker_reports_successful_lifecycle_without_changing_its_result(tmp_pat
     assert all(event.stdout_log == experiment / "stdout.log" for event in events)
     assert all(event.stderr_log == experiment / "stderr.log" for event in events)
     assert events[0].command is None
-    assert events[1].command == ExperimentCommand.argv(("python", "train.py"))
+    assert events[1].command == ExperimentCommand.argv((sys.executable, "train.py"))
     assert events[2].exit_code == 0
     assert events[2].error is None
 
@@ -466,7 +467,7 @@ def test_worker_reports_nonzero_exit_and_ignores_progress_callback_errors(tmp_pa
     experiment = plan_experiment(
         PlanRequest(
             name="failed-progress",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
@@ -513,7 +514,7 @@ def test_worker_executes_verified_directory_source_in_place_without_git(tmp_path
     experiment = plan_experiment(
         PlanRequest(
             name="verified",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
             directory_source_mode="verified-directory",
@@ -536,7 +537,7 @@ def test_worker_rejects_missing_verified_directory_source(tmp_path):
     experiment = plan_experiment(
         PlanRequest(
             name="verified",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
             directory_source_mode="verified-directory",
@@ -565,7 +566,7 @@ def test_worker_rejects_changed_verified_directory_source_before_execution(tmp_p
     experiment = plan_experiment(
         PlanRequest(
             name="verified",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
             directory_source_mode="verified-directory",
@@ -607,7 +608,7 @@ def test_worker_records_verified_directory_command_failure(tmp_path):
     experiment = plan_experiment(
         PlanRequest(
             name="verified",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
             directory_source_mode="verified-directory",
@@ -626,7 +627,7 @@ def test_worker_rechecks_materialized_snapshot_before_execution(tmp_path, monkey
     experiment = plan_experiment(
         PlanRequest(
             name="snapshot-race",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
             directory_source_mode="directory-snapshot",
@@ -661,7 +662,7 @@ def test_worker_executes_directory_snapshot_source_from_isolated_workspace(tmp_p
     experiment = plan_experiment(
         PlanRequest(
             name="snapshot",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
             directory_source_mode="directory-snapshot",
@@ -692,7 +693,7 @@ def test_snapshot_uses_recorded_source_parent_when_original_is_missing(tmp_path)
     experiment = plan_experiment(
         PlanRequest(
             name="snapshot-missing-original",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
             directory_source_mode="directory-snapshot",
@@ -721,7 +722,7 @@ def test_worker_materializes_directory_snapshot_under_the_configured_root(tmp_pa
     experiment = plan_experiment(
         PlanRequest(
             name="snapshot-configured-root",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
             directory_source_mode="directory-snapshot",
@@ -747,7 +748,7 @@ def test_worker_snapshot_workspace_name_matches_the_naming_contract(tmp_path):
     experiment = plan_experiment(
         PlanRequest(
             name="naming-snapshot",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
             directory_source_mode="directory-snapshot",
@@ -778,7 +779,7 @@ def test_worker_snapshot_workspace_manifest_records_source_and_claim_identity(tm
     experiment = plan_experiment(
         PlanRequest(
             name="manifest-snapshot",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
             directory_source_mode="directory-snapshot",
@@ -822,7 +823,7 @@ def test_worker_directory_snapshot_execution_does_not_modify_captured_source(tmp
     experiment = plan_experiment(
         PlanRequest(
             name="snapshot",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
             directory_source_mode="directory-snapshot",
@@ -839,7 +840,7 @@ def test_worker_rejects_missing_captured_directory_snapshot_source(tmp_path):
     experiment = plan_experiment(
         PlanRequest(
             name="snapshot",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
             directory_source_mode="directory-snapshot",
@@ -868,7 +869,7 @@ def test_worker_rejects_tampered_captured_directory_snapshot_source(tmp_path, mu
     experiment = plan_experiment(
         PlanRequest(
             name="snapshot",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
             directory_source_mode="directory-snapshot",
@@ -889,7 +890,7 @@ def test_worker_records_directory_snapshot_command_failure(tmp_path):
     experiment = plan_experiment(
         PlanRequest(
             name="snapshot",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
             directory_source_mode="directory-snapshot",

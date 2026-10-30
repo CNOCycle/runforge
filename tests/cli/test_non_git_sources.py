@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import sys
 from pathlib import Path
 
 from runforge.cli import main
@@ -42,7 +43,7 @@ def test_cli_plans_and_runs_a_verified_directory_experiment(tmp_path, capsys):
                 "--out-dir",
                 str(tmp_path / "reports"),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
             ]
         )
@@ -84,7 +85,7 @@ def test_cli_plans_a_directory_snapshot_experiment_that_outlives_and_runs_after_
                 "--out-dir",
                 str(tmp_path / "reports"),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
             ]
         )
@@ -122,7 +123,7 @@ def test_cli_creates_a_verified_directory_matrix(tmp_path, capsys):
                 "--out-dir",
                 str(tmp_path / "reports"),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
                 "--seed={SEED}",
             ]
@@ -154,7 +155,7 @@ def test_discover_cli_lists_non_git_sourced_experiments(tmp_path, capsys):
                 "--out-dir",
                 str(reports),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
             ]
         )
@@ -180,7 +181,7 @@ def test_cli_rejects_missing_out_dir_for_verified_directory_mode(tmp_path, capsy
             "--source-path",
             str(source),
             "--",
-            "python",
+            sys.executable,
             "train.py",
         ]
     )
@@ -202,7 +203,7 @@ def test_cli_rejects_output_root_inside_directory_snapshot_source(tmp_path, caps
             "--out-dir",
             str(source / "reports"),
             "--",
-            "python",
+            sys.executable,
             "train.py",
         ]
     )
@@ -226,7 +227,7 @@ def test_cli_rejects_commit_and_patch_with_a_non_git_source_mode(tmp_path, capsy
             "--commit",
             "HEAD",
             "--",
-            "python",
+            sys.executable,
             "train.py",
         ]
     )
