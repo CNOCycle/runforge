@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -39,7 +40,7 @@ def _plan(repository: Path, reports: Path, environment_file: Path, capsys) -> Pa
                 "--env-file",
                 str(environment_file),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
             ]
         )

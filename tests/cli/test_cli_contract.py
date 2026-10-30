@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 import runforge.execution.worker as worker_module
@@ -35,7 +37,7 @@ def _plan(tmp_path, capsys, script="print('done')\n"):
                 "--out-dir",
                 str(tmp_path / "reports"),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
             ]
         )
@@ -63,7 +65,16 @@ def test_launch_failure_uses_aggregate_exit_contract_but_records_child_code(tmp_
     repository = create_git_repository(tmp_path / "repository", {"train.py": "raise SystemExit(7)\n"})
 
     result = main(
-        ["launch", "--source-path", str(repository), "--out-dir", str(tmp_path / "reports"), "--", "python", "train.py"]
+        [
+            "launch",
+            "--source-path",
+            str(repository),
+            "--out-dir",
+            str(tmp_path / "reports"),
+            "--",
+            sys.executable,
+            "train.py",
+        ]
     )
 
     experiment = planned_path(capsys.readouterr().out)

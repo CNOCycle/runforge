@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import shlex
+import sys
 from pathlib import Path
 
 from runforge.cli import main
@@ -41,7 +43,7 @@ def test_cli_plans_and_runs_one_explicit_experiment(tmp_path, capsys):
                 "--env-file",
                 str(environment_file),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
             ]
         )
@@ -58,7 +60,7 @@ def test_cli_plans_and_runs_one_explicit_experiment(tmp_path, capsys):
         output,
         re.MULTILINE,
     )
-    assert "Executing command [1/1]: python train.py" in output
+    assert f"Executing command [1/1]: {shlex.quote(sys.executable)} train.py" in output
     assert "  output mode: streaming and logging" in output
     assert "planned command ran" in output
     assert re.search(
@@ -87,7 +89,7 @@ def test_cli_formats_untracked_warnings_without_python_source_lines(tmp_path, ca
                 "--source-path",
                 str(repository),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
             ]
         )
@@ -123,7 +125,7 @@ def test_cli_plans_an_explicit_pinned_git_source(tmp_path, capsys):
                 "--out-dir",
                 str(tmp_path / "reports"),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
             ]
         )
@@ -159,7 +161,7 @@ def test_cli_creates_a_pinned_cartesian_matrix(tmp_path, capsys):
                 "--out-dir",
                 str(tmp_path / "reports"),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
                 "--lr={LR}",
                 "--seed={SEED}",
@@ -206,7 +208,7 @@ def test_cli_creates_a_current_head_cartesian_matrix(tmp_path, capsys):
                 "--out-dir",
                 str(tmp_path / "reports"),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
                 "--seed={SEED}",
             ]
@@ -241,7 +243,7 @@ def test_cli_launches_a_new_experiment_immediately(tmp_path, capsys):
                 "--source-path",
                 str(repository),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
             ]
         )
@@ -257,7 +259,7 @@ def test_cli_launches_a_new_experiment_immediately(tmp_path, capsys):
         output,
         re.MULTILINE,
     )
-    assert "Executing command [1/1]: python train.py" in output
+    assert f"Executing command [1/1]: {shlex.quote(sys.executable)} train.py" in output
     assert "planned command ran" in output
     assert re.search(
         rf"^\[\d{{4}}-\d{{2}}-\d{{2}}T[^]]+Z\] Experiment completed with exit code 0 \[1/1\]: "
@@ -276,7 +278,7 @@ def test_cli_renders_worker_warning_events_to_stderr(tmp_path, capsys):
     experiment = plan_experiment(
         PlanRequest(
             name="warning",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
@@ -307,7 +309,7 @@ def test_worker_cli_prints_effective_arguments_progress_and_summary(tmp_path, ca
     plan_experiment(
         PlanRequest(
             name="worker-cli",
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=reports,
         )
@@ -321,7 +323,7 @@ def test_worker_cli_prints_effective_arguments_progress_and_summary(tmp_path, ca
     assert "  max tasks: 1" in output
     assert "  stream output: disabled" in output
     assert re.search(r"Preparing experiment \[1/1\]:", output)
-    assert "Executing command [1/1]: python train.py" in output
+    assert f"Executing command [1/1]: {shlex.quote(sys.executable)} train.py" in output
     assert "Experiment completed with exit code 0 [1/1]:" in output
     assert "Execution summary:" in output
     assert "  candidates: 1" in output
@@ -341,7 +343,7 @@ def _plan_worker_experiment(tmp_path: Path, reports: Path, name: str, script: st
     return plan_experiment(
         PlanRequest(
             name=name,
-            command=ExperimentCommand.argv(("python", "train.py")),
+            command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=reports,
         )
@@ -398,7 +400,7 @@ def test_matrix_cli_reports_created_plans_when_the_mapping_cannot_be_saved(tmp_p
                 "--out-dir",
                 str(tmp_path / "reports"),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
                 "--seed={SEED}",
             ]

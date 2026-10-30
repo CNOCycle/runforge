@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shlex
+import sys
 from pathlib import Path
 
 from runforge.cli import main
@@ -18,7 +20,7 @@ def test_plan_summary_shows_resolved_defaults_quoted_command_and_redacted_enviro
     environment_file.write_text("API_TOKEN=very-secret\nRUN_MODE=test\n", encoding="utf-8")
     monkeypatch.chdir(repository)
 
-    assert main(["plan", "--env-file", str(environment_file), "--", "python", "train.py", "two words"]) == 0
+    assert main(["plan", "--env-file", str(environment_file), "--", sys.executable, "train.py", "two words"]) == 0
 
     output = capsys.readouterr().out
     assert "RunForge plan effective arguments:" in output
@@ -34,7 +36,7 @@ def test_plan_summary_shows_resolved_defaults_quoted_command_and_redacted_enviro
     assert "  planned inputs: 0" in output
     assert "  command mode: argv" in output
     assert "  shell mode: disabled" in output
-    assert "  command: python train.py 'two words'" in output
+    assert f"  command: {shlex.quote(sys.executable)} train.py 'two words'" in output
     assert "very-secret" not in output
 
 
@@ -56,7 +58,7 @@ def test_plan_captures_a_json_input_tree_and_reports_its_effective_arguments(tmp
                 "--input-tree",
                 str(inputs),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
                 "{INPUT_DIR}/train.json",
             ]
@@ -93,7 +95,7 @@ def test_plan_renders_yaml_yml_and_ini_files_from_an_input_tree(tmp_path, capsys
                 "--input-tree",
                 str(inputs),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
             ]
         )
@@ -128,7 +130,7 @@ def test_run_summary_uses_recorded_configuration_without_environment_values(tmp_
                 "--env-file",
                 str(environment_file),
                 "--",
-                "python",
+                sys.executable,
                 "train.py",
             ]
         )
@@ -145,6 +147,6 @@ def test_run_summary_uses_recorded_configuration_without_environment_values(tmp_
     assert f"  stdout log: {experiment / 'stdout.log'}" in output
     assert f"  stderr log: {experiment / 'stderr.log'}" in output
     assert f"Preparing experiment [1/1]: {experiment}" in output
-    assert "Executing command [1/1]: python train.py" in output
+    assert f"Executing command [1/1]: {shlex.quote(sys.executable)} train.py" in output
     assert f"Experiment completed with exit code 0 [1/1]: {experiment}" in output
     assert "very-secret" not in output

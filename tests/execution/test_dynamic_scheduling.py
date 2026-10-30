@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -32,7 +33,7 @@ def _plan(root, repository, name, *, command=None):
             name=name,
             source_path=repository,
             output_root=root / "reports",
-            command=command or ExperimentCommand.argv(("python", "train.py")),
+            command=command or ExperimentCommand.argv((sys.executable, "train.py")),
         )
     )
 
