@@ -161,7 +161,7 @@ def save_matrix_mapping(experiments: Sequence[Path]) -> Path:
         save_json_object(destination, mapping.to_dict())
     except (OSError, ValueError) as error:
         # Release the reserved name so a failed write leaves no empty artifact
-        # that later expansions would skip and matrix-show would reject.
+        # that later expansions would skip and mapping would reject.
         destination.unlink(missing_ok=True)
         raise ValueError(f"could not write matrix mapping {destination}: {error}") from error
     return destination

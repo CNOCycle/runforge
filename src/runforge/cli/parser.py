@@ -159,7 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=SemanticDefaultsHelpFormatter,
     )
     leaf.add_argument("artifact", type=Path)
-    leaf.set_defaults(handler=commands.matrix_show, command_name="mapping")
+    leaf.set_defaults(handler=commands.mapping, command_name="mapping")
     leaf = leaves.add_parser(
         "schedule",
         help="hold or release pending work without changing execution history",
@@ -192,7 +192,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="WORKSPACE",
         help="exact discovered workspaces to remove (default: list only, remove nothing)",
     )
-    leaf.set_defaults(handler=commands.workspace_cleanup, command_name="workspaces")
+    leaf.set_defaults(handler=commands.workspaces, command_name="workspaces")
     return parser
 
 

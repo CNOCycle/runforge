@@ -1,4 +1,4 @@
-"""Tests for the read-only worker workspace manifest inspection command."""
+"""Tests for workspace listing and manifest inspection."""
 
 from __future__ import annotations
 

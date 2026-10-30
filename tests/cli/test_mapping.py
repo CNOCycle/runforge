@@ -35,7 +35,7 @@ def _artifact(tmp_path: Path) -> Path:
     return save_matrix_mapping(experiments)
 
 
-def test_matrix_show_renders_a_persisted_mapping(tmp_path, capsys):
+def test_mapping_renders_a_persisted_mapping(tmp_path, capsys):
     artifact = _artifact(tmp_path)
 
     assert main(["mapping", str(artifact)]) == 0
@@ -49,7 +49,7 @@ def test_matrix_show_renders_a_persisted_mapping(tmp_path, capsys):
     assert output.count("_sweep_00") >= EXPECTED_ROWS
 
 
-def test_matrix_show_leaves_every_experiment_untouched(tmp_path):
+def test_mapping_leaves_every_experiment_untouched(tmp_path):
     artifact = _artifact(tmp_path)
     before = {path: path.read_bytes() for path in sorted(artifact.parent.rglob("*.json"))}
 
@@ -58,7 +58,7 @@ def test_matrix_show_leaves_every_experiment_untouched(tmp_path):
     assert {path: path.read_bytes() for path in sorted(artifact.parent.rglob("*.json"))} == before
 
 
-def test_matrix_show_reports_an_empty_row_set_without_a_traceback(tmp_path, capsys):
+def test_mapping_reports_an_empty_row_set_without_a_traceback(tmp_path, capsys):
     artifact = tmp_path / "empty_matrix.json"
     save_json_object(
         artifact,
@@ -121,7 +121,7 @@ def test_matrix_show_reports_an_empty_row_set_without_a_traceback(tmp_path, caps
         ),
     ],
 )
-def test_matrix_show_rejects_unreadable_artifacts_cleanly(tmp_path, capsys, content, match):
+def test_mapping_rejects_unreadable_artifacts_cleanly(tmp_path, capsys, content, match):
     artifact = tmp_path / "artifact.json"
     if content is not None:
         artifact.write_text(content, encoding="utf-8")

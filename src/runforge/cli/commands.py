@@ -13,14 +13,14 @@ from runforge.cli.output import (
     print_discovered_workspaces,
     print_discovery,
     print_effective_arguments,
+    print_mapping_arguments,
     print_matrix_mapping,
     print_matrix_mapping_file,
-    print_matrix_show_arguments,
     print_planning_arguments,
     print_removed_workspace,
-    print_worker_cleanup_arguments,
     print_worker_progress,
     print_worker_summary,
+    print_workspaces_arguments,
 )
 from runforge.cli.requests import matrix_request, planning_request
 from runforge.execution.discovery import discover_paths
@@ -85,15 +85,15 @@ def matrix(arguments: argparse.Namespace) -> int:
     return 0
 
 
-def matrix_show(arguments: argparse.Namespace) -> int:
-    print_matrix_show_arguments(arguments)
+def mapping(arguments: argparse.Namespace) -> int:
+    print_mapping_arguments(arguments)
     print_matrix_mapping_file(arguments.artifact)
     return 0
 
 
-def workspace_cleanup(arguments: argparse.Namespace) -> int:
+def workspaces(arguments: argparse.Namespace) -> int:
     root = arguments.root if arguments.root is not None else default_workspace_root()
-    print_worker_cleanup_arguments(arguments, root)
+    print_workspaces_arguments(arguments, root)
     discovered = discover_workspaces(root)
     print_discovered_workspaces(discovered)
     if arguments.confirm is None:
