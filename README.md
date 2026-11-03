@@ -9,8 +9,8 @@ The complete canonical interface and exit behavior are in the
 **RunForge** is a small experiment runner for turning a source checkout, command,
 environment overrides, and output directory into a durable run record. It is
 designed for the common research problem where an experiment is planned on one
-machine, executed later on another worker, and still needs to reflect the exact
-source state the planner intended.
+machine, executed later on another worker that shares its storage, and still
+needs to reflect the exact source state the planner intended.
 
 The first-class workflow is Git-backed. A plan can either capture the current
 `HEAD` plus tracked changes or use an explicit pinned commit/ref and optional
@@ -78,8 +78,13 @@ Planning confirms where the experiment plan was created:
 Experiment plan created at: $REPO/reports/main/01234567_baseline_0000
 ```
 
-Run the experiment directory printed by planning on the same or another machine
-with access to the recorded repository:
+Run the experiment directory printed by planning on the same machine, or on
+another machine with access to the recorded repository and the shared report
+root mounted at the same absolute path as on the planning machine. RunForge
+supports local single-machine use and clusters with a shared filesystem; see
+[shared filesystems](docs/operations/shared-filesystems.md). Backups are fine, but do
+not run a moved or copied plan from a different path, because published plans can
+record absolute paths:
 
 ```bash
 runforge run "$REPO/reports/main/01234567_baseline_0000"
