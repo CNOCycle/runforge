@@ -4,6 +4,13 @@ Running several workers against one report root requires the storage underneath
 to provide two things. This page states them plainly, because RunForge cannot
 verify them for you.
 
+## Supported Scenarios
+
+RunForge supports local, single-machine use, and clusters whose workers share
+one filesystem. Backing up an experiment is fine. Running a moved or copied experiment
+or report root from a different path is not supported and can break published
+plans, as described below.
+
 ## The Two Requirements
 
 **Every worker must see the same experiment directories and metadata.** A worker
@@ -13,6 +20,13 @@ that cannot see a claim will create its own.
 acquired by creating a directory that must fail for every process but one. If
 that operation is not atomic across hosts, or if the result is cached rather
 than coherent, two workers can both believe they own the same experiment.
+
+When planning and execution use different machines, mount the shared report
+root at the same absolute path on the planning machine and every worker. Plans
+can contain `{ARTIFACT_DIR}` and `{INPUT_DIR}` paths resolved at planning time.
+Mounting the same files at a different path, or moving them, does not update
+those recorded paths, and a command can then fail or use the old location. Local
+single-machine execution needs no network filesystem.
 
 Workers running Git-backed plans must reach the recorded repository. A
 `verified-directory` plan records an absolute directory that must exist at the
