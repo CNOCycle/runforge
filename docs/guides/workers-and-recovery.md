@@ -187,9 +187,9 @@ A plan held after queue creation is skipped at its execution boundary. A held
 plan released while other tasks run can become eligible on the next refill.
 An all-held or all-contended queue exits without a rescan busy loop.
 
-F schedule accepts multiple explicit experiment/report-root paths. It preflights
-discovery, deduplicates targets, and reports each successful edit. Busy-target
-errors return 2; edits already successfully applied to other targets remain.
+The schedule command accepts multiple explicit experiment/report-root paths. It
+preflights discovery, deduplicates targets, and reports each successful edit.
+Busy-target errors return 2; edits already successfully applied to other targets remain.
 
 Hold/release can replace a malformed schedule.json under the same claim guard.
 They still require valid config.json and status.json. Bulk edits continue on
@@ -246,7 +246,7 @@ A held experiment must be released before retrying.
 Force is an operator-confirmed escape hatch for interrupted or claimed work;
 it cannot prove that a former process stopped. Never force a live experiment.
 
-F retry can select failed plans under multiple roots. Force is refused unless
+Retry can select failed plans under multiple roots. Force is refused unless
 every explicitly supplied path is itself an experiment directory. Completed and
 other ineligible states are skipped; failed attempts are retried once per
 invocation, not repeatedly until they succeed.

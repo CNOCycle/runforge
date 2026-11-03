@@ -222,7 +222,7 @@ def _add_planning_arguments(parser: argparse.ArgumentParser, *, default_source_m
         default=default_source_mode,
         help=(
             "source selection mode: Git current-HEAD or pinned-commit, or non-Git verified-directory "
-            "(live external path, re-verified before every run) or directory-snapshot (self-contained captured copy)"
+            "(live external path, re-verified before every run) or directory-snapshot (captured copy of the source)"
         ),
     )
     parser.add_argument(

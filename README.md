@@ -14,7 +14,7 @@ source state the planner intended.
 
 The first-class workflow is Git-backed. A plan can either capture the current
 `HEAD` plus tracked changes or use an explicit pinned commit/ref and optional
-external patch. Both source modes can expand a deterministic parameter matrix
+external patch. Both source modes can expand an ordered parameter matrix
 into independent plans. Planning never executes the experiment command.
 Running later reconstructs the normalized source in a detached worktree.
 `verified-directory` and `directory-snapshot` extend the same planner and
@@ -240,7 +240,7 @@ See [Source modes](docs/reference/source-modes.md) for all four modes.
 
 Two modes plan a plain directory rather than a Git repository.
 `verified-directory` executes the original in place and re-verifies it before
-every run; `directory-snapshot` captures a self-contained copy. Both require
+every run; `directory-snapshot` captures a copy of the source. Both require
 `--out-dir` to resolve outside `--source-path`.
 
 ```bash

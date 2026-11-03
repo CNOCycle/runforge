@@ -7,21 +7,26 @@ Symptoms, what causes them, and the supported fix.
 A live worker owns it, or a dead one left its claim. The message names the
 holder and when it was acquired.
 
-Confirm the process has stopped, then `runforge retry --force EXPERIMENT_DIR`.
-If the owner is not resolvable from where you are, see
-[Slurm and containers](slurm-and-containers.md).
+Confirm that both the worker and its child process have stopped before using
+`runforge retry --force EXPERIMENT_DIR` on a failed or `inprogress` experiment.
+Forced retry does not clear a claim on a `created` or `init` experiment; preserve
+that record and investigate the claim. See the
+[recovery workflow](../guides/workers-and-recovery.md#restart-confirmed-interrupted-experiments)
+and, for scheduler or container owners, [Slurm and containers](slurm-and-containers.md).
 
 ## An experiment is stuck in `inprogress`
 
-Its worker died. Nothing recovers this automatically by design; see
+It may still be running, or its worker may have died. Nothing recovers an
+interrupted run automatically; see
 [Worker lifecycle and claims](../architecture/worker-lifecycle-and-claims.md).
-Use `retry --force` after confirming the process is gone.
+Use `retry --force` only after confirming both worker and child have stopped.
 
-## `worker` exits 2 but everything looks fine
+## `run` exits 2 but everything looks fine
 
-Some candidate's metadata is invalid. `discover` reports each invalid candidate
-with its path and a reason. Valid plans still ran — `2` means the scan is
-untrustworthy, not that nothing happened.
+Some candidate's metadata may be invalid. `discover` reports each invalid
+candidate with its path and a reason. Exit `2` can also indicate a CLI or
+discovery error; inspect the diagnostic and execution summary. Valid plans may
+already have run.
 
 ## The program created a directory literally named `{ARTIFACT_DIR}`
 

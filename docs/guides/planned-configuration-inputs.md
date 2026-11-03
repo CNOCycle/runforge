@@ -25,17 +25,19 @@ in the planned command and `RUNFORGE_INPUT_DIR` in the child environment.
 Author the source templates once. A complete string placeholder preserves the
 selected JSON scalar type, while an embedded placeholder produces a JSON string.
 
+`configs/train.json`:
+
 ```json
-// configs/train.json
 {
   "output_directory": "{ARTIFACT_DIR}/training",
   "checkpoint_name": "checkpoint.pt",
-  "epochs": "{EPOCHS}"
+  "epochs": 50
 }
 ```
 
+`configs/eval.json`:
+
 ```json
-// configs/eval.json
 {
   "checkpoint": "{ARTIFACT_DIR}/training/checkpoint.pt",
   "output_directory": "{ARTIFACT_DIR}/evaluation"
@@ -58,6 +60,9 @@ SHA-256 digests in `input-manifest.json`, logs, and artifacts. Training and
 evaluation agree because both paths are derived from that experiment's single
 `artifacts/` directory.
 
+The literal `50` above stays a JSON number; the [Matrices](#matrices) section
+shows an exact `"{SEED}"` placeholder keeping its JSON type.
+
 ## YAML And INI Files
 
 YAML, YML, and INI use the same one-pass placeholder names without
@@ -78,13 +83,16 @@ epochs: {EPOCHS}
 checkpoint = {ARTIFACT_DIR}/training/checkpoint.pt
 ```
 
-Numbers become stable text such as `50`, and booleans become `true` or `false`.
-The template author supplies any quoting required by the target format.
+For the YAML example, supply `EPOCHS` as a matrix parameter; for a single plan,
+replace `{EPOCHS}` with a fixed value. Numbers become stable text such as `50`,
+and booleans become `true` or `false`. The template author supplies any quoting
+required by the target format.
 
 ## Matrices
 
-Matrix values are available to every template. In JSON, an exact placeholder
-keeps the JSON type, so a number or boolean does not become a string:
+Matrix values are available to every template. For a separate sweep, use this
+as `configs/train.json`. In JSON, an exact placeholder keeps the JSON type, so
+a number or boolean does not become a string:
 
 ```json
 {
@@ -106,6 +114,7 @@ keeps the JSON type, so a number or boolean does not become a string:
 runforge plan \
   --name sweep \
   --source-path "$REPO" \
+  --source-mode pinned-git \
   --commit HEAD \
   --matrix matrix.json \
   --input-tree "$REPO/configs" \
@@ -115,5 +124,7 @@ runforge plan \
 `ARTIFACT_DIR` and `INPUT_DIR` are reserved RunForge placeholders and cannot
 be matrix parameter names. Unknown placeholders, invalid JSON/YAML/INI,
 unsafe paths, symbolic links, non-UTF-8 files, and changed input files fail
-before a child command can run. Secrets should remain in explicit environment
-overrides or an external secret reference, not in a planned input tree.
+before a child command can run. Do not put secrets in a planned input tree or
+`--env-file`: both are recorded on disk. Supply them through your own secret
+manager or the worker's environment, as described in
+[Dynamic environment variables](dynamic-environment-variables.md#secrets).

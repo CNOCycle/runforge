@@ -50,4 +50,5 @@ afterwards. `verified-directory` executes the original directory in place.
 workspace and removes it after the run.
 
 In every mode the worker exports `RUNFORGE_ARTIFACT_DIR` and
-`RUNFORGE_INPUT_DIR`, and writes output only below the experiment directory.
+`RUNFORGE_INPUT_DIR` and stores its logs under the experiment directory. The
+child command controls its own output paths; RunForge does not confine its writes.
