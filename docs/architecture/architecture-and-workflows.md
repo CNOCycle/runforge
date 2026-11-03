@@ -90,7 +90,7 @@ sequenceDiagram
         CLI->>Report: save mapping artifact
         CLI-->>User: plan paths and mapping
         User->>CLI: runforge run REPORT_ROOT
-        CLI->>Worker: discover; refill after queue exhaustion
+        CLI->>Worker: discover, refill after queue exhaustion
         Worker->>Report: claim runnable plans
         Worker->>Executor: execute claimed plans
         Executor->>Report: update status, logs, artifacts
