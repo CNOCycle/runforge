@@ -117,7 +117,7 @@ sequenceDiagram
 The two happen at different times, often on different machines. A plan captures
 intent and source identity durably; a worker consumes it later, possibly
 elsewhere, possibly in parallel with other workers. Keeping them separate is
-what makes an experiment directory portable and auditable.
+what makes an experiment directory auditable.
 
 Planning never executes. That is not a limitation but the property that lets a
 matrix expand hundreds of plans safely before a single command starts.

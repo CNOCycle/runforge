@@ -35,8 +35,9 @@ runforge plan \
 `--source-mode pinned-git --commit v1.2.0`.
 
 Parameter names are sorted to define axis order, and each array's own order is
-preserved. The expansion is therefore deterministic: the same matrix file and
-source always produce the same directories in the same order.
+preserved. The combination order is therefore deterministic for the same matrix
+file. Directory names depend on available counts in the report root, so another
+expansion can allocate different names for the same combinations.
 
 The source is resolved and validated once and shared by every combination, and
 every combination is validated before anything is published. Planning never

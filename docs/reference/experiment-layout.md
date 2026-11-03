@@ -1,7 +1,10 @@
 # Experiment Layout
 
-An experiment directory is self-contained: everything needed to reconstruct,
-execute, and audit one run lives inside it.
+An experiment directory holds a plan and its execution history. It does not
+always contain the source: Git plans require the recorded repository, and
+`verified-directory` plans require the original directory. Even snapshot plans
+can contain absolute input and artifact paths tied to the report's original
+location; see [Non-Git directory sources](../guides/non-git-sources.md).
 
 ## Git-Backed Layout
 
@@ -54,6 +57,11 @@ band directory rather than inside any experiment:
 REPORT_ROOT/BRANCH_SLUG/COMMIT8_NAME_SLUG_matrix.json
 ```
 
+Non-Git bands use `verified/` or `snapshot/` and the source digest prefix in
+place of `BRANCH_SLUG` and `COMMIT8`. A later expansion with the same prefix
+writes `..._matrix_0001.json`, `..._matrix_0002.json`, and so on rather than
+overwriting an earlier mapping.
+
 See [Matrices and mapping](../guides/matrices-and-mapping.md).
 
 ## Who Writes What
@@ -90,7 +98,7 @@ created -> init -> inprogress -> completed
 | `completed` | Command exited `0` |
 | `failed` | Command exited non-zero, or preparation failed |
 
-`created` and `init` are runnable. `inprogress` with no live worker requires
+`created` and `init` are runnable. `inprogress` with no live worker or child process requires
 `retry --force`; see
 [Workers and recovery](../guides/workers-and-recovery.md).
 
@@ -112,8 +120,8 @@ claim/owner.json
 
 The directory's existence is the lock — it is created with an exclusive
 operation, so at most one process can hold it. `token` is a random identifier
-that fences every status write; `owner` is diagnostic and names the process to
-check before forcing recovery.
+that fences every status write; `owner` is diagnostic and names the worker to
+check, along with any child process it started, before forcing recovery.
 
 
 ## Scheduling holds

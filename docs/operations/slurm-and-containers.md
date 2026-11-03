@@ -48,17 +48,21 @@ secrets.
 
 1. `runforge discover "$REPORT_ROOT"` to find experiments stuck `inprogress`.
 2. Read the owner from the error message, or from `claim/owner.json`.
-3. Confirm the job is gone — `squeue -j JOBID`, or `sacct -j JOBID` for a job
-   that has already left the queue.
-4. `runforge retry --force EXPERIMENT_DIR`.
+3. Check the job with `squeue -j JOBID` or `sacct -j JOBID` after it leaves
+   the queue. Independently confirm that both the worker and any child process
+   it started have stopped; a job record alone does not establish that every
+   child has stopped.
+4. For a failed or `inprogress` experiment, run
+   `runforge retry --force EXPERIMENT_DIR`. Forced retry does not clear a claim
+   on a `created` or `init` experiment; preserve that record and investigate.
 
-Step 3 is the one that matters. `--force` is an escape hatch, not a concurrency
+Step 3, confirming both worker and child have stopped, is the one that matters. `--force` is an escape hatch, not a concurrency
 guarantee: using it while the original process still runs can execute the
 experiment twice, and RunForge cannot detect that.
 
 ## Preemption And Time Limits
 
-A worker killed by a scheduler time limit or preemption leaves its experiment
+A worker killed by a scheduler time limit or preemption can leave its experiment
 `inprogress` with a claim. There is no heartbeat, so nothing notices
 automatically. Budget a `discover` pass after a batch finishes rather than
 assuming a clean exit.

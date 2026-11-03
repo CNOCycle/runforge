@@ -12,7 +12,7 @@ source is copied.
 | Source stored in the experiment | No, only a manifest and the path | Yes, a complete copy |
 | Executes from | The original directory, in place | An isolated temporary workspace |
 | Survives the original being edited | No, execution fails | Yes |
-| Portable to another machine | No | Yes |
+| Source available without the original directory | No | Yes |
 | Storage cost per experiment | Manifest only | Full source tree |
 
 Both modes ignore `.git/` and record no commit, branch, patch, or untracked-file
@@ -58,7 +58,7 @@ This mode is deliberately local and non-portable.
 
 ## Directory Snapshot
 
-Use this when you want the experiment to be self-contained.
+Use this when you want the source captured with the experiment.
 
 ```bash
 runforge plan \
@@ -85,6 +85,13 @@ missing. By default, the worker creates `runforge-workspaces` beside its recorde
 path, so that path's parent must exist and be writable on the execution machine.
 If it is unavailable, create a writable directory and set
 `RUNFORGE_WORKSPACE_ROOT` to that existing directory before starting the worker.
+
+The captured source can be used on another machine, but the entire experiment
+is not automatically relocatable. `{ARTIFACT_DIR}` and `{INPUT_DIR}` are
+resolved to absolute report paths when planning and stored in commands and
+rendered inputs. Those paths must still be accessible at the same locations
+when the experiment runs. Runtime environment variables instead reflect the
+experiment's current location; they do not rewrite already-rendered paths.
 
 Capture or verification failure leaves no partially published plan and never
 starts the command.
@@ -125,8 +132,8 @@ REPORT_ROOT/
 ## Matrices
 
 Both modes work with `matrix`. The source is scanned and validated once, then
-shared across every combination. Snapshot plans remain self-contained even when
-that duplicates a small tree for each experiment.
+shared across every combination. Each snapshot plan contains its own captured
+source tree, which duplicates that tree for each experiment.
 
 ```bash
 runforge plan \
