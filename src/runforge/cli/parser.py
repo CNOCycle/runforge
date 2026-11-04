@@ -60,6 +60,10 @@ class SemanticDefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
         return super()._get_help_string(action)
 
 
+class SemanticRawDescriptionHelpFormatter(SemanticDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    """Preserve example layout while showing semantic defaults."""
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the eight explicit, flat operation selectors."""
     parser = argparse.ArgumentParser(
@@ -163,14 +167,23 @@ def build_parser() -> argparse.ArgumentParser:
     leaf = leaves.add_parser(
         "schedule",
         help="hold or release pending work without changing execution history",
-        formatter_class=SemanticDefaultsHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            '  runforge schedule --hold "$REPORT_ROOT/**/*baseline*"\n'
+            '  runforge schedule --hold "$EXPERIMENT1" "$EXPERIMENT2"\n'
+            '  runforge schedule --release "$REPORT_ROOT/**/*baseline*"\n\n'
+            "PATH accepts filesystem wildcards; ** matches any number of directory levels (one per pattern).\n"
+            "Quote a pattern so RunForge expands it and skips matrix mapping files.\n"
+            "Unmatched patterns are errors."
+        ),
+        formatter_class=SemanticRawDescriptionHelpFormatter,
     )
     action = leaf.add_mutually_exclusive_group(required=True)
     action.add_argument("--hold", dest="held", action="store_true", help="prevent future execution of selected plans")
     action.add_argument(
         "--release", dest="held", action="store_false", help="remove a scheduling hold, never an execution claim"
     )
-    leaf.add_argument("paths", type=Path, nargs="+", metavar="PATH")
+    leaf.add_argument("paths", type=Path, nargs="+", metavar="PATH", help="experiment paths, report roots, or patterns")
     leaf.set_defaults(handler=commands.schedule, command_name="schedule")
     leaf = leaves.add_parser(
         "workspaces",

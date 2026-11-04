@@ -174,6 +174,49 @@ runforge schedule --hold "$EXPERIMENT"
 runforge schedule --release "$EXPERIMENT"
 ```
 
+To select multiple experiment directories, pass their paths together:
+
+```bash
+runforge schedule --hold "$EXPERIMENT1" "$EXPERIMENT2"
+runforge schedule --release "$EXPERIMENT1" "$EXPERIMENT2"
+```
+
+You can also select paths using filesystem wildcards. For example, to hold all
+experiment directories containing `baseline` at any depth under a report root:
+
+```bash
+runforge discover "$REPORT_ROOT"
+runforge schedule --hold "$REPORT_ROOT/**/*baseline*"
+runforge schedule --release "$REPORT_ROOT/**/*baseline*"
+```
+
+Check the discovery output to confirm the intended experiments before holding.
+Patterns use `*`, `?`, `[...]`, and `**`, not regexes, and apply to paths rather
+than recorded experiment names. `*` matches within one directory level; `**`
+matches any number of levels, including none, so `"$REPORT_ROOT/**/*baseline*"`
+also finds baseline plans in each branch directory. To restrict the branch, name
+it: `"$REPORT_ROOT/main/*baseline*"`. Limits: a pattern may contain at most one
+`**` (more is an error), and only directories match. Matching follows the rules of
+`runforge discover`: it never enters hidden directories or symbolic links, and it
+stops at an experiment, even a damaged one, so artifacts inside are not scanned.
+The leading directories of a pattern that exist are used as written, even when
+their names contain `[` or `*`, so `"/data/reports [2026]/**/*baseline*"` stays
+inside that directory. After the first wildcard, `*`, `?`, and `[` in a directory
+name are pattern syntax; there is no escape character. A directory that cannot be
+read stops the command with an error before any hold changes.
+
+Quote the pattern. RunForge then expands it itself and ignores matching
+non-directory files, such as matrix mapping JSON. An unquoted pattern is expanded
+by the shell first, and a mapping file it passes as an explicit path makes the
+command fail without changes; unquoted `**` also needs `shopt -s globstar` in
+Bash. If you must leave a pattern unquoted, end it with `/`, such as
+`$REPORT_ROOT/main/*baseline*/`, to limit shell matches to directories.
+Existing literal paths take precedence even when their names contain wildcard
+characters. An unmatched pattern reports an error and changes no holds. Matched
+directories that contain no experiments, such as an empty `baseline-backup`, are
+skipped; the command exits 2 only if no experiments are found at all. Shells
+differ in how they handle an unquoted pattern that has no matches.
+
 Holds are separate scheduling metadata in schedule.json; execution status,
 immutable configuration, attempts, logs, and artifacts remain unchanged. An
 absent schedule file means not held. Invalid scheduling metadata prevents

@@ -23,7 +23,8 @@ from runforge.cli.output import (
     print_workspaces_arguments,
 )
 from runforge.cli.requests import matrix_request, planning_request
-from runforge.execution.discovery import discover_paths
+from runforge.execution.discovery import DiscoveryError, discover_paths
+from runforge.execution.path_patterns import expand_path_pattern, has_wildcard
 from runforge.execution.scheduling import SchedulingError, set_hold
 from runforge.execution.worker import BatchRequest, WorkerError, execute_paths
 from runforge.execution.workspace_cleanup import (
@@ -167,8 +168,26 @@ def _plan_matrix_with_warnings(request: MatrixPlanRequest) -> tuple[Path, ...]:
     return experiments
 
 
+def _schedule_paths(paths: tuple[Path, ...]) -> tuple[Path, ...]:
+    """Expand wildcard paths before any scheduling edits."""
+    selected = []
+    for path in paths:
+        expanded = path.expanduser()
+        if expanded.exists() or not has_wildcard(str(expanded)):
+            selected.append(expanded)
+            continue
+        matches = expand_path_pattern(expanded)
+        if not matches:
+            raise ValueError(f"No directories match schedule pattern: {path}")
+        selected.extend(matches)
+    return tuple(selected)
+
+
 def schedule(arguments: argparse.Namespace) -> int:
-    discovery = discover_paths(tuple(arguments.paths), require_each=True, read_scheduling=False)
+    # Directories without experiments, such as an empty one matched by a wildcard, are skipped.
+    discovery = discover_paths(_schedule_paths(tuple(arguments.paths)), read_scheduling=False)
+    if not discovery.experiments and not discovery.diagnostics:
+        raise DiscoveryError("No experiments found under the given paths")
     errors = [f"{item.path}: {item.message}" for item in discovery.diagnostics]
     for item in discovery.experiments:
         try:

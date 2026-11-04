@@ -31,6 +31,8 @@ runforge discover "$REPORT_ROOT"
 runforge run "$REPORT_ROOT" --max-tasks 2 --stream-output
 runforge schedule --hold "$EXPERIMENT"
 runforge schedule --release "$EXPERIMENT"
+runforge schedule --hold "$EXPERIMENT1" "$EXPERIMENT2"
+runforge schedule --hold "$REPORT_ROOT/**/*baseline*"
 runforge retry "$EXPERIMENT"
 runforge workspaces "$WORKSPACE_ROOT"
 runforge workspaces "$WORKSPACE_ROOT" --remove "$WORKSPACE"
@@ -62,6 +64,25 @@ stdout.log and stderr.log as well as optional console mirroring.
 schedule holds are separate from lifecycle status and immutable configuration.
 Active ownership rejects an edit. Invalid control metadata prevents selection;
 priority is neither accepted nor advertised. See [worker behavior and recovery](../guides/workers-and-recovery.md) for ownership, refill, and retry details.
+
+Schedule accepts multiple experiment paths, report roots, or filesystem wildcard
+paths, for both `--hold` and `--release`. A quoted path like
+`"$REPORT_ROOT/**/*baseline*"` is expanded by RunForge. Patterns use `*`, `?`,
+`[...]`, and `**`, not regular expressions. `*` stays within one directory level
+and `**` matches any number of levels, including none; a pattern may contain at
+most one `**` (more is an error). Matching follows `runforge discover`: it never
+enters hidden directories or symbolic links and stops at an experiment, even a
+damaged one. Leading directories that exist are used as written, even with `[`
+or `*` in their names; later wildcard characters are pattern syntax with no
+escape. A directory that cannot be read stops the command with exit 2 before any
+hold changes.
+Matched files are ignored and existing literal paths take precedence over
+pattern interpretation. Quote patterns: a shell-expanded pattern also passes
+matrix mapping files, which fail as paths, and unquoted `**` needs
+`shopt -s globstar` in Bash. If any pattern matches no directories, or no
+experiments are found at all, the command exits 2 before editing holds. Matched
+directories without experiments are otherwise skipped. Review paths with
+`runforge discover` before applying a pattern.
 
 -n/--max-tasks is a positive successful-completion quota across queue refills.
 The batch process discovers again only after exhausting its queue; it exits if
