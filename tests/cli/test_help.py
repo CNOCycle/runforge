@@ -125,6 +125,11 @@ def test_schedule_help_shows_patterns_and_multiple_paths(capsys):
     assert "--name-regex" not in output
 
 
+@pytest.mark.parametrize("leaf", ["discover", "run", "retry"])
+def test_path_commands_mention_quoted_wildcard_patterns(leaf, capsys):
+    assert "quoted wildcard patterns" in _single_line(_help(capsys, leaf))
+
+
 @pytest.mark.parametrize("leaf", ["discover", "mapping", "schedule", "workspaces"])
 def test_readonly_and_control_commands_reject_streaming(leaf, capsys):
     with pytest.raises(SystemExit) as raised:

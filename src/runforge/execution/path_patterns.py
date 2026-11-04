@@ -29,6 +29,24 @@ def has_wildcard(text: str) -> bool:
     return any(character in text for character in WILDCARD_CHARACTERS)
 
 
+def expand_path_arguments(paths: tuple[Path, ...]) -> tuple[Path, ...]:
+    """Expand path arguments: an existing path is used as written, otherwise a pattern is expanded.
+
+    Raises ``ValueError`` when a pattern matches no directory, before any command acts.
+    """
+    selected = []
+    for path in paths:
+        expanded = path.expanduser()
+        if expanded.exists() or not has_wildcard(str(expanded)):
+            selected.append(expanded)
+            continue
+        matches = expand_path_pattern(expanded)
+        if not matches:
+            raise ValueError(f"No directories match pattern: {path}")
+        selected.extend(matches)
+    return tuple(selected)
+
+
 def expand_path_pattern(pattern: Path) -> list[Path]:
     """Directories matching ``pattern``, sorted; empty when nothing matches.
 

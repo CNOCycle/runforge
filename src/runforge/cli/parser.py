@@ -101,7 +101,13 @@ def build_parser() -> argparse.ArgumentParser:
             epilog=_WORKSPACE_HELP,
             formatter_class=SemanticDefaultsHelpFormatter,
         )
-        leaf.add_argument("paths", type=Path, nargs="+", metavar="PATH", help="experiment or report-root paths")
+        leaf.add_argument(
+            "paths",
+            type=Path,
+            nargs="+",
+            metavar="PATH",
+            help="experiment or report-root paths, or quoted wildcard patterns",
+        )
         _add_stream_output_argument(leaf)
         leaf.set_defaults(
             handler=commands.run,
@@ -140,7 +146,7 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="*",
         default=[Path(".")],
         metavar="PATH",
-        help="paths to inspect (default: current directory)",
+        help="paths or quoted wildcard patterns to inspect (default: current directory)",
     )
     hints = leaf.add_mutually_exclusive_group()
     hints.add_argument(

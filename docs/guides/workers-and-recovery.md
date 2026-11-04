@@ -139,6 +139,52 @@ recovery. Local host/PID evidence cannot establish liveness across machines or
 PID namespaces. On Linux, a PID reused by a process started after the claim is
 reported as dead. The hint does not change a claim or status.
 
+## Select experiments with patterns
+
+`discover`, `run`, `retry` and `schedule` accept quoted wildcard patterns wherever
+they accept an experiment or report-root path. For example, to preview and then run
+every baseline experiment at any depth under a report root:
+
+```bash
+runforge discover "$REPORT_ROOT/**/*baseline*"
+runforge run "$REPORT_ROOT/**/*baseline*"
+runforge retry "$REPORT_ROOT/**/*baseline*"
+```
+
+Check the discovery output to confirm the intended experiments before running or
+changing anything. Patterns use `*`, `?`, `[...]`, and `**`, not regexes, and apply
+to paths rather than recorded experiment names. `*` matches within one directory
+level; `**` matches any number of levels, including none, so
+`"$REPORT_ROOT/**/*baseline*"` also finds baseline plans in each branch directory.
+To restrict the branch, name it: `"$REPORT_ROOT/main/*baseline*"`. Limits: a pattern
+may contain at most one `**` (more is an error), and only directories match.
+Matching follows the rules of `runforge discover`: it never enters hidden directories
+or symbolic links, and it stops at an experiment, even a damaged one, so artifacts
+inside are not scanned. The leading directories of a pattern that exist are used as
+written, even when their names contain `[` or `*`, so
+`"/data/reports [2026]/**/*baseline*"` stays inside that directory. After the first
+wildcard, `*`, `?`, and `[` in a directory name are pattern syntax; there is no
+escape character. A directory that cannot be read stops the command with an error
+before it acts.
+
+Quote the pattern. RunForge then expands it itself and ignores matching
+non-directory files, such as matrix mapping JSON. An unquoted pattern is expanded by
+the shell first, and a mapping file it passes as an explicit path makes the command
+fail without changes; unquoted `**` also needs `shopt -s globstar` in Bash. If you
+must leave a pattern unquoted, end it with `/`, such as
+`$REPORT_ROOT/main/*baseline*/`, to limit shell matches to directories. Existing
+literal paths take precedence even when their names contain wildcard characters. An
+unmatched pattern reports an error and nothing runs or changes. `run` and `retry`
+still require an experiment under every matched directory, so use patterns that
+match experiments or report roots that contain them. Shells differ in how they handle
+an unquoted pattern that has no matches.
+
+`retry --force` accepts patterns and keeps its own rule that every path must be an
+experiment directory, so a pattern that also matches a report root is refused as a
+whole. Use it only after confirming that the old worker and child stopped. `run`
+expands a pattern once when it starts; an experiment published later is found only
+under a matched report root.
+
 ## Execute available work
 
 ```bash
@@ -152,8 +198,9 @@ while an experiment is executing. It exits when a refill has no unvisited
 eligible work, or its successful-completion quota is reached. It does not poll,
 wait for future publications after becoming idle, or run as a daemon.
 
-Only report-root selections refill. Explicit experiment leaves, including a
-new plan executed by launch, finish without another discovery scan. Mixed
+Only report-root selections refill; a pattern counts as the directories it matched.
+Explicit experiment leaves, including a new plan executed by launch, finish
+without another discovery scan. Mixed
 selections refill the report roots while retaining invocation-wide task counts.
 
 Claims decide ownership across multiple processes. Each task is claimed
@@ -181,41 +228,16 @@ runforge schedule --hold "$EXPERIMENT1" "$EXPERIMENT2"
 runforge schedule --release "$EXPERIMENT1" "$EXPERIMENT2"
 ```
 
-You can also select paths using filesystem wildcards. For example, to hold all
-experiment directories containing `baseline` at any depth under a report root:
+Quoted wildcard patterns select paths here as well; see
+[select experiments with patterns](#select-experiments-with-patterns). `schedule`
+skips matched directories that contain no experiments, and exits 2 before changing
+any hold if no experiments are found at all.
 
 ```bash
 runforge discover "$REPORT_ROOT"
 runforge schedule --hold "$REPORT_ROOT/**/*baseline*"
 runforge schedule --release "$REPORT_ROOT/**/*baseline*"
 ```
-
-Check the discovery output to confirm the intended experiments before holding.
-Patterns use `*`, `?`, `[...]`, and `**`, not regexes, and apply to paths rather
-than recorded experiment names. `*` matches within one directory level; `**`
-matches any number of levels, including none, so `"$REPORT_ROOT/**/*baseline*"`
-also finds baseline plans in each branch directory. To restrict the branch, name
-it: `"$REPORT_ROOT/main/*baseline*"`. Limits: a pattern may contain at most one
-`**` (more is an error), and only directories match. Matching follows the rules of
-`runforge discover`: it never enters hidden directories or symbolic links, and it
-stops at an experiment, even a damaged one, so artifacts inside are not scanned.
-The leading directories of a pattern that exist are used as written, even when
-their names contain `[` or `*`, so `"/data/reports [2026]/**/*baseline*"` stays
-inside that directory. After the first wildcard, `*`, `?`, and `[` in a directory
-name are pattern syntax; there is no escape character. A directory that cannot be
-read stops the command with an error before any hold changes.
-
-Quote the pattern. RunForge then expands it itself and ignores matching
-non-directory files, such as matrix mapping JSON. An unquoted pattern is expanded
-by the shell first, and a mapping file it passes as an explicit path makes the
-command fail without changes; unquoted `**` also needs `shopt -s globstar` in
-Bash. If you must leave a pattern unquoted, end it with `/`, such as
-`$REPORT_ROOT/main/*baseline*/`, to limit shell matches to directories.
-Existing literal paths take precedence even when their names contain wildcard
-characters. An unmatched pattern reports an error and changes no holds. Matched
-directories that contain no experiments, such as an empty `baseline-backup`, are
-skipped; the command exits 2 only if no experiments are found at all. Shells
-differ in how they handle an unquoted pattern that has no matches.
 
 Holds are separate scheduling metadata in schedule.json; execution status,
 immutable configuration, attempts, logs, and artifacts remain unchanged. An
@@ -230,7 +252,7 @@ A plan held after queue creation is skipped at its execution boundary. A held
 plan released while other tasks run can become eligible on the next refill.
 An all-held or all-contended queue exits without a rescan busy loop.
 
-The schedule command accepts multiple explicit experiment/report-root paths. It
+The schedule command accepts multiple experiment/report-root paths or patterns. It
 preflights discovery, deduplicates targets, and reports each successful edit.
 Busy-target errors return 2; edits already successfully applied to other targets remain.
 
@@ -290,7 +312,7 @@ Force is an operator-confirmed escape hatch for interrupted or claimed work;
 it cannot prove that a former process stopped. Never force a live experiment.
 
 Retry can select failed plans under multiple roots. Force is refused unless
-every explicitly supplied path is itself an experiment directory. Completed and
+every supplied path, after any pattern is expanded, is itself an experiment directory. Completed and
 other ineligible states are skipped; failed attempts are retried once per
 invocation, not repeatedly until they succeed.
 

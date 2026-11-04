@@ -10,7 +10,7 @@ are deferred.
 | --- | --- | --- |
 | plan [--matrix FILE] | Publish one plan or a matrix; never execute. | 0, or 2 on error |
 | launch | Publish and execute exactly one new plan. | Aggregate 0/1/2 |
-| run PATH... | Execute eligible experiment leaves beneath explicit paths. | Aggregate 0/1/2 |
+| run PATH... | Execute eligible experiment leaves beneath explicit paths or patterns. | Aggregate 0/1/2 |
 | retry PATH... | Archive and retry failed selected plans. | Aggregate 0/1/2 |
 | discover [PATH...] | Union/deduplicate read-only experiment discovery. | 0, or 2 on invalid metadata |
 | mapping ARTIFACT | Read a saved matrix mapping. | 0, or 2 on error |
@@ -29,11 +29,13 @@ runforge plan --matrix "$AXES" --source-path "$SOURCE" --out-dir "$REPORT_ROOT" 
 runforge mapping "$MAPPING_ARTIFACT"
 runforge discover "$REPORT_ROOT"
 runforge run "$REPORT_ROOT" --max-tasks 2 --stream-output
+runforge run "$REPORT_ROOT/**/*baseline*"
 runforge schedule --hold "$EXPERIMENT"
 runforge schedule --release "$EXPERIMENT"
 runforge schedule --hold "$EXPERIMENT1" "$EXPERIMENT2"
 runforge schedule --hold "$REPORT_ROOT/**/*baseline*"
 runforge retry "$EXPERIMENT"
+runforge retry "$REPORT_ROOT/**/*baseline*"
 runforge workspaces "$WORKSPACE_ROOT"
 runforge workspaces "$WORKSPACE_ROOT" --remove "$WORKSPACE"
 runforge --version
@@ -59,30 +61,45 @@ script. Place planning options before --. No implicit shell execution is added.
 Only launch, run, retry, and root processing expose -s/--stream-output, preserving
 stdout.log and stderr.log as well as optional console mirroring.
 
+## Path patterns
+
+`discover`, `run`, `retry` (with or without `--force`) and `schedule` accept quoted
+wildcard patterns wherever they accept an experiment or report-root path, for example
+`runforge run "$REPORT_ROOT/**/*baseline*"`. RunForge expands the pattern itself;
+one rule applies to every command.
+
+- Syntax: `*`, `?`, `[...]` within one path component, and at most one `**`, which
+  matches any number of directory levels, including none. More than one `**` is an
+  error. Patterns match paths, not recorded experiment names, and are not regular
+  expressions. Only directories match, so matrix mapping files are ignored.
+- Matching follows `runforge discover`: it never enters hidden directories or
+  symbolic links and stops at an experiment, even a damaged one.
+- An existing path is used as written, even with `[` or `*` in its name, and so are
+  the leading directories of a pattern that exist. After the first wildcard,
+  `*`, `?` and `[` in a name are pattern syntax; there is no escape.
+- A pattern that matches no directory, or a directory that cannot be read, exits 2
+  before the command acts. `run` and `retry` still require an experiment under every
+  matched directory; `schedule` skips matched directories without experiments.
+- Quote the pattern. An unquoted pattern is expanded by the shell, which also passes
+  matrix mapping files as paths; unquoted `**` recurses only after
+  `shopt -s globstar` in Bash.
+- `retry --force` keeps its rule that every path must be an experiment directory, so a
+  pattern that also matches a report root is refused as a whole. Confirm that old
+  workers and children stopped, and preview the matches with `runforge discover`.
+- `run` expands a pattern once at start; the refill rediscovery covers the matched
+  directories, so an experiment published later is found only under a matched report
+  root.
+
 ## Holds, quotas, and errors
 
 schedule holds are separate from lifecycle status and immutable configuration.
 Active ownership rejects an edit. Invalid control metadata prevents selection;
 priority is neither accepted nor advertised. See [worker behavior and recovery](../guides/workers-and-recovery.md) for ownership, refill, and retry details.
 
-Schedule accepts multiple experiment paths, report roots, or filesystem wildcard
-paths, for both `--hold` and `--release`. A quoted path like
-`"$REPORT_ROOT/**/*baseline*"` is expanded by RunForge. Patterns use `*`, `?`,
-`[...]`, and `**`, not regular expressions. `*` stays within one directory level
-and `**` matches any number of levels, including none; a pattern may contain at
-most one `**` (more is an error). Matching follows `runforge discover`: it never
-enters hidden directories or symbolic links and stops at an experiment, even a
-damaged one. Leading directories that exist are used as written, even with `[`
-or `*` in their names; later wildcard characters are pattern syntax with no
-escape. A directory that cannot be read stops the command with exit 2 before any
-hold changes.
-Matched files are ignored and existing literal paths take precedence over
-pattern interpretation. Quote patterns: a shell-expanded pattern also passes
-matrix mapping files, which fail as paths, and unquoted `**` needs
-`shopt -s globstar` in Bash. If any pattern matches no directories, or no
-experiments are found at all, the command exits 2 before editing holds. Matched
-directories without experiments are otherwise skipped. Review paths with
-`runforge discover` before applying a pattern.
+Schedule accepts multiple experiment paths, report roots, or
+[path patterns](#path-patterns), for both `--hold` and `--release`. It skips matched
+directories that contain no experiments, and exits 2 before editing holds if no
+experiments are found at all. Review the selection with `runforge discover` first.
 
 -n/--max-tasks is a positive successful-completion quota across queue refills.
 The batch process discovers again only after exhausting its queue; it exits if
@@ -95,9 +112,10 @@ Invalid metadata takes precedence over failure. Detailed child codes are stored
 in status.json. Completed work is not rerun and retries are explicit.
 
 launch/run/retry all use the aggregate contract. run/retry require explicit
-paths; an empty or missing input path is an error before any execution. Paths are
-unioned and deduplicated. Force retry requires every explicit argument to be an
-experiment directory; bulk forced root recovery is refused.
+paths or patterns; an empty or missing input path is an error before any execution.
+Paths are unioned and deduplicated. Force retry requires every path, after any
+pattern is expanded, to be an experiment directory; bulk forced root recovery is
+refused.
 
 --older-than and --started-before are mutually exclusive discovery hints based
 on experiment start time. They do not recover tasks or remove claims. -f/--force
@@ -110,8 +128,8 @@ It is disabled by default; normal retry starts with empty artifacts. The recorde
 command must already support checkpoint recovery. Copies are independent of the
 archive, current logs are fresh, and symbolic links/special files are rejected.
 Root selection reuses each eligible failed experiment's own artifacts. Combining
-it with --force still requires explicit experiment paths and confirmation that
-prior workers and children stopped. See the [checkpoint recovery guide](../guides/workers-and-recovery.md#reuse-artifacts-for-application-checkpoint-recovery)
+it with --force still requires experiment directories (explicit or from a pattern)
+and confirmation that prior workers and children stopped. See the [checkpoint recovery guide](../guides/workers-and-recovery.md#reuse-artifacts-for-application-checkpoint-recovery)
 for costs, limitations, and interrupted preparation.
 
 ## Environment and output

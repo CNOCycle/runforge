@@ -112,7 +112,7 @@ def test_unmatched_or_missing_path_prevents_all_edits(groups, capsys, bad_path):
     target = plans["baseline"][0]
     assert main(["schedule", "--hold", str(target), str(target.parent / bad_path)]) == CLI_ERROR
     error = capsys.readouterr().err
-    assert ("No directories match schedule pattern" if "*" in bad_path else "does not exist") in error
+    assert ("No directories match pattern" if "*" in bad_path else "does not exist") in error
     assert not any((path / "schedule.json").exists() for group in plans.values() for path in group)
 
 
@@ -213,7 +213,7 @@ def test_globstar_without_matches_prevents_all_edits(nested, capsys):
     reports, plans = nested
     target = plans["baseline"][0]
     assert main(["schedule", "--hold", str(target), str(reports / "**" / "*no-such-group*")]) == CLI_ERROR
-    assert "No directories match schedule pattern" in capsys.readouterr().err
+    assert "No directories match pattern" in capsys.readouterr().err
     assert not any((path / "schedule.json").exists() for group in plans.values() for path in group)
 
 
