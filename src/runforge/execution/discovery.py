@@ -144,6 +144,16 @@ def _inspect_experiment_boundary(path: Path, names: set[str]) -> tuple[bool, tup
     return False, tuple(diagnostics)
 
 
+def is_experiment_boundary(path: Path) -> bool:
+    """Whether discovery would stop at this directory as an experiment, valid or damaged."""
+    try:
+        with os.scandir(path) as entries:
+            names = {entry.name for entry in entries if not entry.is_dir()}
+    except OSError:
+        return False
+    return _inspect_experiment_boundary(path, names)[0]
+
+
 def discover_paths(
     paths: tuple[Path, ...], *, require_each: bool = False, read_scheduling: bool = True
 ) -> DiscoveryResult:

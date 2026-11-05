@@ -23,7 +23,8 @@ from runforge.cli.output import (
     print_workspaces_arguments,
 )
 from runforge.cli.requests import matrix_request, planning_request
-from runforge.execution.discovery import discover_paths
+from runforge.execution.discovery import DiscoveryError, discover_paths
+from runforge.execution.path_patterns import expand_path_arguments
 from runforge.execution.scheduling import SchedulingError, set_hold
 from runforge.execution.worker import BatchRequest, WorkerError, execute_paths
 from runforge.execution.workspace_cleanup import (
@@ -48,7 +49,7 @@ def run(arguments: argparse.Namespace) -> int:
     print_effective_arguments(arguments.command_name, rows)
     result = execute_paths(
         BatchRequest(
-            tuple(arguments.paths),
+            expand_path_arguments(tuple(arguments.paths)),
             arguments.max_tasks,
             arguments.stream_output,
             retry=arguments.retry,
@@ -136,7 +137,7 @@ def discover(arguments: argparse.Namespace) -> int:
             ("stale cutoff", cutoff.isoformat().replace("+00:00", "Z") if cutoff else "not set"),
         ],
     )
-    result = discover_paths(tuple(arguments.paths))
+    result = discover_paths(expand_path_arguments(tuple(arguments.paths)))
     print_discovery(result, stale_cutoff=cutoff)
     return 2 if result.diagnostics else 0
 
@@ -168,7 +169,10 @@ def _plan_matrix_with_warnings(request: MatrixPlanRequest) -> tuple[Path, ...]:
 
 
 def schedule(arguments: argparse.Namespace) -> int:
-    discovery = discover_paths(tuple(arguments.paths), require_each=True, read_scheduling=False)
+    # Directories without experiments, such as an empty one matched by a wildcard, are skipped.
+    discovery = discover_paths(expand_path_arguments(tuple(arguments.paths)), read_scheduling=False)
+    if not discovery.experiments and not discovery.diagnostics:
+        raise DiscoveryError("No experiments found under the given paths")
     errors = [f"{item.path}: {item.message}" for item in discovery.diagnostics]
     for item in discovery.experiments:
         try:

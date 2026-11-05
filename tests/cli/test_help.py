@@ -115,6 +115,21 @@ def test_priority_is_deferred_and_hold_release_are_exclusive(capsys):
     assert "--priority" not in _help(capsys, "schedule")
 
 
+def test_schedule_help_shows_patterns_and_multiple_paths(capsys):
+    output = _single_line(_help(capsys, "schedule"))
+    assert 'schedule --hold "$REPORT_ROOT/**/*baseline*"' in output
+    assert 'schedule --hold "$EXPERIMENT1" "$EXPERIMENT2"' in output
+    assert 'schedule --release "$REPORT_ROOT/**/*baseline*"' in output
+    assert "filesystem wildcards" in output
+    assert "any number of directory levels" in output
+    assert "--name-regex" not in output
+
+
+@pytest.mark.parametrize("leaf", ["discover", "run", "retry"])
+def test_path_commands_mention_quoted_wildcard_patterns(leaf, capsys):
+    assert "quoted wildcard patterns" in _single_line(_help(capsys, leaf))
+
+
 @pytest.mark.parametrize("leaf", ["discover", "mapping", "schedule", "workspaces"])
 def test_readonly_and_control_commands_reject_streaming(leaf, capsys):
     with pytest.raises(SystemExit) as raised:
