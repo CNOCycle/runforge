@@ -8,11 +8,6 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def utc_compact_timestamp() -> str:
-    """Return the current UTC time as a filesystem-safe, colon-free timestamp."""
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-
-
 def parse_utc(value: str) -> datetime:
     """Parse a RunForge-persisted UTC timestamp (utc_now's format) back into an aware datetime.
 

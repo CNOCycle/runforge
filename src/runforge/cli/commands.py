@@ -145,8 +145,8 @@ def discover(arguments: argparse.Namespace) -> int:
 def _resolve_stale_cutoff(arguments: argparse.Namespace) -> datetime | None:
     if arguments.older_than is not None:
         return datetime.now(timezone.utc) - arguments.older_than
-    if arguments.updated_before is not None:
-        return arguments.updated_before
+    if arguments.started_before is not None:
+        return arguments.started_before
     return None
 
 

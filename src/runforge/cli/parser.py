@@ -43,7 +43,7 @@ def _duration_argument(value: str) -> timedelta:
 
 
 def _utc_timestamp_argument(value: str) -> datetime:
-    """Parse a --updated-before CLI value into an aware UTC datetime."""
+    """Parse a --started-before CLI value into an aware UTC datetime."""
     try:
         return parse_utc(value)
     except ValueError as error:
@@ -157,7 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     hints.add_argument(
         "--started-before",
-        dest="updated_before",
+        dest="started_before",
         type=_utc_timestamp_argument,
         metavar="TIMESTAMP",
         help="read-only start-time cutoff (default: not set)",
@@ -215,7 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _add_planning_arguments(parser: argparse.ArgumentParser, *, default_source_mode: str = "current-head") -> None:
+def _add_planning_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--name", default="exp", help="short experiment name")
     parser.add_argument(
         "--out-dir",
@@ -238,7 +238,7 @@ def _add_planning_arguments(parser: argparse.ArgumentParser, *, default_source_m
     parser.add_argument(
         "--source-mode",
         choices=("current-head", "pinned-git", "verified-directory", "directory-snapshot"),
-        default=default_source_mode,
+        default="current-head",
         help=(
             "source selection mode: Git current-HEAD or pinned-commit, or non-Git verified-directory "
             "(live external path, re-verified before every run) or directory-snapshot (captured copy of the source)"

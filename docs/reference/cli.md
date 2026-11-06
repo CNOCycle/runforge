@@ -51,15 +51,16 @@ directory), --source-mode (current-head), --out-dir, --commit, --patch,
 Source modes are current-head, pinned-git, verified-directory, and
 directory-snapshot. Pinned Git requires --commit and alone permits --patch.
 Git output defaults to SOURCE_REPOSITORY/reports; non-Git modes require an
-explicit report root outside the source. Configuration capture/source validation
-rules are unchanged; see [source modes](source-modes.md) and
+explicit report root outside the source. Configuration capture and source
+validation rules are defined in [source modes](source-modes.md) and
 [planned inputs](../guides/planned-configuration-inputs.md).
 
 Everything after -- belongs to the child, including words matching RunForge
 command names. It is an argv array unless --shell explicitly selects one quoted
 script. Place planning options before --. No implicit shell execution is added.
-Only launch, run, retry, and root processing expose -s/--stream-output, preserving
-stdout.log and stderr.log as well as optional console mirroring.
+Only launch, run, and retry expose -s/--stream-output, preserving
+stdout.log and stderr.log as well as optional console mirroring. run and retry
+also accept report-root paths, which select the experiments beneath them.
 
 ## Path patterns
 
