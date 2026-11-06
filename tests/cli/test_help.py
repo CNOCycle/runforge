@@ -30,7 +30,7 @@ def test_version_flags_need_no_subcommand(capsys):
         with pytest.raises(SystemExit) as raised:
             main([flag])
         assert raised.value.code == 0
-        assert capsys.readouterr().out.startswith("runforge 0.3.0+")
+        assert capsys.readouterr().out.startswith("runforge 0.4.0+")
 
 
 def test_plan_help_preserves_source_input_and_command_contract(capsys):
@@ -81,12 +81,10 @@ def test_bare_cli_is_a_usage_error(capsys):
     assert "required" in capsys.readouterr().err
 
 
-def test_top_help_has_eight_canonical_operations(capsys):
+def test_top_help_has_seven_canonical_operations(capsys):
     output = _help(capsys)
-    for name in ("plan", "launch", "run", "retry", "discover", "mapping", "schedule", "workspaces"):
+    for name in ("plan", "launch", "run", "retry", "discover", "mapping", "schedule"):
         assert name in output
-    for old in ("matrix-show", "worker-cleanup", "worker-inspect"):
-        assert old not in output
     assert "runforge SUBCOMMAND --help" in output
 
 
@@ -130,8 +128,14 @@ def test_path_commands_mention_quoted_wildcard_patterns(leaf, capsys):
     assert "quoted wildcard patterns" in _single_line(_help(capsys, leaf))
 
 
-@pytest.mark.parametrize("leaf", ["discover", "mapping", "schedule", "workspaces"])
+@pytest.mark.parametrize("leaf", ["discover", "mapping", "schedule"])
 def test_readonly_and_control_commands_reject_streaming(leaf, capsys):
     with pytest.raises(SystemExit) as raised:
         main([leaf, "--stream-output"])
     assert raised.value.code == CLI_ERROR_EXIT
+
+
+@pytest.mark.parametrize("leaf", ["launch", "run", "retry"])
+def test_execution_help_describes_the_in_experiment_workdir(leaf, capsys):
+    output = _single_line(_help(capsys, leaf))
+    assert ".workspace directory inside each experiment" in output

@@ -30,6 +30,7 @@ STDOUT_LOG_FILE = "stdout.log"
 STDERR_LOG_FILE = "stderr.log"
 CLAIM_DIRECTORY = "claim"
 CLAIM_FILE = "owner.json"
+WORKSPACE_DIRECTORY = ".workspace"
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,15 @@ class ExperimentDirectory:
     def claim_file(self) -> Path:
         """Return the persisted owner metadata inside the claim directory."""
         return self.claim / CLAIM_FILE
+
+    @property
+    def workspace(self) -> Path:
+        """Return the temporary working directory an execution builds and removes.
+
+        Dot-prefixed so discovery and recursive tools run from a source tree that
+        holds its own reports never descend into the copied source.
+        """
+        return self.root / WORKSPACE_DIRECTORY
 
     def source_file(self, filename: str) -> Path:
         """Return a source payload path previously validated as a filename."""

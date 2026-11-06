@@ -100,3 +100,47 @@ def test_patch_operations_report_invalid_patch_and_cleanup_still_works(tmp_path)
 
     repository.remove_worktree(worktree)
     assert not worktree.exists()
+
+
+def test_worktree_registration_reports_presence_lock_and_deleted_directories(tmp_path):
+    repository_path = _repository(tmp_path)
+    repository = GitRepository.locate(repository_path)
+    worktree = tmp_path / "linked"
+
+    assert repository.worktree_registration(worktree) is None
+
+    git(repository_path, "worktree", "add", "--detach", str(worktree), "HEAD")
+    registration = repository.worktree_registration(worktree)
+    assert registration is not None and not registration.locked
+
+    git(repository_path, "worktree", "lock", "--reason", "keep", str(worktree))
+    assert repository.worktree_registration(worktree).locked
+
+    git(repository_path, "worktree", "unlock", str(worktree))
+    shutil.rmtree(worktree)
+    registration = repository.worktree_registration(worktree)
+    assert registration is not None and not registration.locked
+
+
+def test_worktree_registration_does_not_match_a_link_to_a_registered_worktree(tmp_path):
+    repository_path = _repository(tmp_path)
+    repository = GitRepository.locate(repository_path)
+    worktree = tmp_path / "linked"
+    git(repository_path, "worktree", "add", "--detach", str(worktree), "HEAD")
+    link = tmp_path / "link"
+    link.symlink_to(worktree, target_is_directory=True)
+
+    assert repository.worktree_registration(link) is None
+
+
+def test_worktree_registration_keeps_a_path_containing_a_newline_in_one_record(tmp_path):
+    repository_path = _repository(tmp_path)
+    repository = GitRepository.locate(repository_path)
+    worktree = tmp_path / "line\nlocked"
+    git(repository_path, "worktree", "add", "--detach", str(worktree), "HEAD")
+    git(repository_path, "worktree", "lock", str(worktree))
+
+    registration = repository.worktree_registration(worktree)
+
+    assert registration is not None and registration.locked
+    assert repository.worktree_registration(tmp_path / "line") is None

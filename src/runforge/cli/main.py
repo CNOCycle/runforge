@@ -9,7 +9,6 @@ from runforge.cli.parser import build_parser
 from runforge.execution.discovery import DiscoveryError
 from runforge.execution.errors import WorkerError
 from runforge.execution.retry import RetryError
-from runforge.execution.workspace_cleanup import WorkspaceCleanupError
 from runforge.infrastructure.claims import ClaimError
 from runforge.planning.planner import PlanningError
 
@@ -25,7 +24,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         PlanningError,
         RetryError,
         WorkerError,
-        WorkspaceCleanupError,
         ValueError,
     ) as error:
         print(f"error: {error}", file=sys.stderr)

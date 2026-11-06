@@ -44,10 +44,10 @@ comparison, ignore rules, and file-type restrictions.
 
 ## Execution Environment
 
-Git-backed modes execute from a detached worktree created per run and removed
-afterwards. `verified-directory` executes the original directory in place.
-`directory-snapshot` materializes its captured copy in an isolated temporary
-workspace and removes it after the run.
+Git-backed modes execute from a detached worktree created per run at
+`.workspace/` inside the experiment and removed afterwards. `verified-directory`
+executes the original directory in place. `directory-snapshot` materializes its
+captured copy at the same `.workspace/` path and removes it after the run.
 
 In every mode the worker exports `RUNFORGE_ARTIFACT_DIR` and
 `RUNFORGE_INPUT_DIR` and stores its logs under the experiment directory. The

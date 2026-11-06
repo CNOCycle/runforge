@@ -10,28 +10,20 @@ from pathlib import Path
 
 from runforge.cli.output import (
     path_text,
-    print_discovered_workspaces,
     print_discovery,
     print_effective_arguments,
     print_mapping_arguments,
     print_matrix_mapping,
     print_matrix_mapping_file,
     print_planning_arguments,
-    print_removed_workspace,
     print_worker_progress,
     print_worker_summary,
-    print_workspaces_arguments,
 )
 from runforge.cli.requests import matrix_request, planning_request
 from runforge.execution.discovery import DiscoveryError, discover_paths
 from runforge.execution.path_patterns import expand_path_arguments
 from runforge.execution.scheduling import SchedulingError, set_hold
-from runforge.execution.worker import BatchRequest, WorkerError, execute_paths
-from runforge.execution.workspace_cleanup import (
-    default_workspace_root,
-    discover_workspaces,
-    remove_workspace,
-)
+from runforge.execution.worker import BatchRequest, execute_paths
 from runforge.planning.matrix_mapping import build_matrix_mapping, save_matrix_mapping
 from runforge.planning.planner import MatrixPlanRequest, PlanRequest, plan_experiment, plan_matrix
 
@@ -89,26 +81,6 @@ def matrix(arguments: argparse.Namespace) -> int:
 def mapping(arguments: argparse.Namespace) -> int:
     print_mapping_arguments(arguments)
     print_matrix_mapping_file(arguments.artifact)
-    return 0
-
-
-def workspaces(arguments: argparse.Namespace) -> int:
-    root = arguments.root if arguments.root is not None else default_workspace_root()
-    print_workspaces_arguments(arguments, root)
-    discovered = discover_workspaces(root)
-    print_discovered_workspaces(discovered)
-    if arguments.confirm is None:
-        return 0
-    discovered_paths = {workspace.path for workspace in discovered}
-    requested = tuple(Path(path).expanduser().resolve() for path in arguments.confirm)
-    unknown = tuple(path for path in requested if path not in discovered_paths)
-    if unknown:
-        raise WorkerError(
-            "--remove named a path that discovery did not find: " + ", ".join(str(path) for path in unknown)
-        )
-    for path in requested:
-        remove_workspace(path)
-        print_removed_workspace(path)
     return 0
 
 

@@ -1,8 +1,8 @@
 # CLI reference
 
 RunForge publishes immutable experiment plans, executes them under atomic claims,
-and keeps report history separate from temporary workspaces. Priority controls
-are deferred.
+and runs each command in a temporary workdir inside its experiment. Priority
+controls are deferred.
 
 ## Canonical operations
 
@@ -15,7 +15,6 @@ are deferred.
 | discover [PATH...] | Union/deduplicate read-only experiment discovery. | 0, or 2 on invalid metadata |
 | mapping ARTIFACT | Read a saved matrix mapping. | 0, or 2 on error |
 | schedule (--hold \| --release) PATH... | Change scheduling holds, not claims or history. | 0, or 2 on rejected targets |
-| workspaces [ROOT] [--remove PATH...] | List recorded identity; remove only exact named targets. | 0, or 2 on error |
 
 Global -h/--help and -v/--version require no experiment execution. Family help
 and leaf help describe their own required arguments and semantic defaults.
@@ -36,8 +35,6 @@ runforge schedule --hold "$EXPERIMENT1" "$EXPERIMENT2"
 runforge schedule --hold "$REPORT_ROOT/**/*baseline*"
 runforge retry "$EXPERIMENT"
 runforge retry "$REPORT_ROOT/**/*baseline*"
-runforge workspaces "$WORKSPACE_ROOT"
-runforge workspaces "$WORKSPACE_ROOT" --remove "$WORKSPACE"
 runforge --version
 ```
 
@@ -137,13 +134,13 @@ for costs, limitations, and interrupted preparation.
 
 | Variable | Role |
 | --- | --- |
-| RUNFORGE_WORKSPACE_ROOT | Existing writable parent for temporary workspaces; separate from report roots. |
 | RUNFORGE_CLAIM_OWNER | Diagnostic claim owner, such as host:PID or scheduler job ID. |
 | RUNFORGE_ARTIFACT_DIR | Child output-artifact directory, supplied by RunForge. |
 | RUNFORGE_INPUT_DIR | Child immutable input tree, supplied by RunForge. |
 
-Unset workspace configuration uses `runforge-workspaces` beside the recorded source.
-An unusable configured parent fails rather than silently changing location.
+Git and directory-snapshot executions run in `.workspace/` inside the
+experiment, removed after the command exits. A leftover one is deleted and
+rebuilt by the next execution of that experiment, never reused.
 Effective arguments print paths/choices and environment key names, never ambient
 or captured environment values. Each selected task reports its environment keys,
 artifact directory, and executing attempt number before the child command begins.
@@ -151,15 +148,12 @@ Run arguments report the completion quota; retry arguments report force and
 artifact reuse.
 Progress, logs, summaries, matrix tables, and
 warnings remain human-readable; no machine-readable output protocol is added.
-Workspace identity describes its recorded creator, not current process activity.
-Cleanup requires independently confirmed abandonment and exact named targets.
 
 Before execution, run/retry/launch assess inprogress or claimed experiments from
 their initial selection as active, stale, or unknown. Active claims (a running
 local PID that started before the claim) are not reported. Stale and unknown
-records are reported with recorded ownership, process evidence, token-matched
-workspaces, and manual recovery commands. Inspection is read-only
+records are reported with recorded ownership, process evidence, any workdir
+present in the experiment, and manual recovery commands. Inspection is read-only
 and does not change selection, exit accounting, or claims. Unrelated runnable
-work continues. The check reuses discovery and searches only current workspace
-parents for affected records; it is not a global workspace inventory. See the
+work continues. The check reuses discovery for affected records. See the
 [pre-start recovery workflow](../guides/workers-and-recovery.md#before-starting-again-after-a-restart).

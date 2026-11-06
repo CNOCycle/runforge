@@ -61,23 +61,15 @@ the plans themselves are published and runnable. The mapping is derived from
 each `config.json`, so nothing is lost permanently. Check disk space and
 permissions on the report root.
 
-## Leftover workspace directories
+## Leftover `.workspace/` directories
 
-Normal execution removes its temporary workspace after each experiment, including
-ordinary command failures. An abrupt kill, crash, or cleanup error can leave it
-behind. Workspace contents do not provide process resume or reattachment.
-
-```bash
-runforge workspaces "$WORKSPACE_ROOT"
-runforge workspaces "$WORKSPACE_ROOT" --remove "$WORKSPACE"
-```
-
-The first form lists recorded identity and explicit unknowns without deletion.
-The second removes only exact named discovered paths. The operator must verify
-that the worker and child processes stopped; host/PID/owner records and age alone
-are not proof. Saved experiment reports are separate from temporary workspaces.
-Git worktrees are deregistered correctly on removal.
-
-Set RUNFORGE_WORKSPACE_ROOT to an existing writable parent to keep workspaces in one known place.
-See [the CLI reference](../reference/cli.md) and
-[shared filesystems](shared-filesystems.md).
+Normal execution removes the temporary `.workspace/` inside the experiment after
+each command, including ordinary command failures. An abrupt kill, crash, or
+cleanup error can leave it behind. Its contents do not provide process resume
+or reattachment. The next execution of that experiment, normally
+`runforge retry --force` after confirming the worker and child stopped, deletes
+it and builds a fresh one, so copy out anything you need first. A leftover Git
+worktree you locked with `git worktree lock` is never deleted: execution fails
+until you unlock it. Host/PID/owner
+records and age alone are not proof that the process stopped. See
+[workers and recovery](../guides/workers-and-recovery.md#temporary-workdir).

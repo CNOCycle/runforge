@@ -12,14 +12,11 @@ from runforge.infrastructure.duration import DurationError, parse_duration
 from runforge.version import display_version
 
 
-_WORKSPACE_HELP = (
-    "Worker workspace: set RUNFORGE_WORKSPACE_ROOT to an existing writable parent "
-    "before execution. Git and directory-snapshot default to runforge-workspaces "
-    "beside the recorded source; verified-directory "
-    "runs in its original source directory. Example: export "
-    "RUNFORGE_WORKSPACE_ROOT=/work/runforge-workspaces. This is separate from the "
-    "report root holding saved plans, logs, and artifacts. See the README quick "
-    "start: 'Choose where workers run'."
+_WORKDIR_HELP = (
+    "Workdir: Git and directory-snapshot plans run in a temporary .workspace "
+    "directory inside each experiment, removed after the command exits; one left "
+    "by an interrupted execution is deleted before the next execution of that "
+    "experiment. Verified-directory plans run in their original source directory."
 )
 
 
@@ -65,7 +62,7 @@ class SemanticRawDescriptionHelpFormatter(SemanticDefaultsHelpFormatter, argpars
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the eight explicit, flat operation selectors."""
+    """Build the seven explicit, flat operation selectors."""
     parser = argparse.ArgumentParser(
         prog="runforge",
         description="Plan, inspect, and run reproducible Git-backed and non-Git experiments.",
@@ -78,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
         leaf = leaves.add_parser(
             name,
             help="publish one plan" if name == "plan" else "publish and execute one plan",
-            epilog=_WORKSPACE_HELP if name == "launch" else None,
+            epilog=_WORKDIR_HELP if name == "launch" else None,
             formatter_class=SemanticDefaultsHelpFormatter,
         )
         _add_planning_arguments(leaf)
@@ -98,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
         leaf = leaves.add_parser(
             name,
             help="execute eligible experiments" if name == "run" else "archive and retry failed experiments",
-            epilog=_WORKSPACE_HELP,
+            epilog=_WORKDIR_HELP,
             formatter_class=SemanticDefaultsHelpFormatter,
         )
         leaf.add_argument(
@@ -191,27 +188,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     leaf.add_argument("paths", type=Path, nargs="+", metavar="PATH", help="experiment paths, report roots, or patterns")
     leaf.set_defaults(handler=commands.schedule, command_name="schedule")
-    leaf = leaves.add_parser(
-        "workspaces",
-        help="list recorded workspace identity; remove only explicitly named paths",
-        formatter_class=SemanticDefaultsHelpFormatter,
-    )
-    leaf.add_argument(
-        "root",
-        type=Path,
-        nargs="?",
-        default=None,
-        help="workspace parent (default: RUNFORGE_WORKSPACE_ROOT, else current directory)",
-    )
-    leaf.add_argument(
-        "--remove",
-        dest="confirm",
-        type=Path,
-        nargs="+",
-        metavar="WORKSPACE",
-        help="exact discovered workspaces to remove (default: list only, remove nothing)",
-    )
-    leaf.set_defaults(handler=commands.workspaces, command_name="workspaces")
     return parser
 
 

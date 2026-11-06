@@ -186,7 +186,6 @@ class DirectorySnapshotSource:
     """Normalized identity for a self-contained captured directory snapshot.
 
     The snapshot is the source of truth, so ``original_path`` need not exist.
-    Its parent selects the default worker workspace root unless overridden.
     """
 
     original_path: Path

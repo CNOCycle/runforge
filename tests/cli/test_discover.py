@@ -21,7 +21,6 @@ from tests.support import create_git_repository
 
 
 CLI_ERROR_EXIT = 2
-COMMAND_FAILURE_EXIT = 1
 
 
 def _repository(tmp_path: Path) -> Path:
