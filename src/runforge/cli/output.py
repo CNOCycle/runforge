@@ -220,13 +220,10 @@ def boolean_text(value: bool) -> str:
 def print_effective_arguments(
     subcommand: str,
     rows: Sequence[tuple[str, str]],
-    *,
-    timestamp: bool = False,
 ) -> None:
-    printer = _worker_print if timestamp else print
-    printer(f"RunForge {subcommand} effective arguments:")
+    print(f"RunForge {subcommand} effective arguments:")
     for label, value in rows:
-        printer(f"  {label}: {value}")
+        print(f"  {label}: {value}")
 
 
 def _worker_print(message: str, *, file: object | None = None) -> None:
