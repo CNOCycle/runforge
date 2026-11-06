@@ -44,8 +44,9 @@ cli -> planning / execution -> schemas / infrastructure
 `schemas` holds no workflow or filesystem behavior. `infrastructure` owns
 external and on-disk mechanics without depending on planning, execution, or CLI
 code. `planning` and `execution` share those foundations while remaining
-independent workflows. The CLI composes them and owns all human-readable
-presentation — no module below `cli/` writes to the console.
+independent workflows. The CLI composes them and presents status and progress;
+execution also mirrors child stdout and stderr to the console when streaming is
+enabled.
 
 `ExperimentDirectory` is the single owner of standard experiment paths and typed
 persistence. Workflows do not repeat filename literals or decode JSON ad hoc.

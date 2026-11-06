@@ -1,8 +1,9 @@
 # CLI reference
 
-RunForge publishes immutable experiment plans, executes them under atomic claims,
-and runs each command in a temporary workdir inside its experiment. Priority
-controls are deferred.
+RunForge publishes immutable experiment plans and executes them under atomic
+claims. Git and directory-snapshot commands run in a temporary workdir inside
+the experiment; verified-directory commands run in their original directory.
+Priority controls are deferred.
 
 ## Canonical operations
 

@@ -1,9 +1,8 @@
 # Dynamic Environment Variables
 
 Some values cannot be written into a static environment file because they are
-not known until RunForge has chosen where the experiment will run. The path of
-the detached worktree, the artifact directory, and the rendered input directory
-are all decided per experiment.
+specific to each experiment. Its working directory depends on the source mode;
+the artifact and rendered input directories belong to the experiment record.
 
 This guide explains which mechanism to use for each kind of value, and why
 mixing them silently produces the wrong path.
@@ -65,15 +64,16 @@ planning if a path looks wrong.
 
 ## Values Derived From The Runtime Directory
 
-A worker executes the recorded command from a detached worktree whose path is
-chosen per run. Anything relative to that directory must be derived at runtime,
-inside a wrapper:
+Git and directory-snapshot commands run from `.workspace/` inside the
+experiment; verified-directory commands run from the original source directory.
+Derive paths relative to the working directory inside the wrapper so it works
+for the selected source mode:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Resolved when the worker runs this script, in whichever worktree it created.
+# Resolved from the working directory when the worker runs this script.
 export MY_DATA_DIR="$(pwd -P)/data"
 export TRAIN_CONFIG="$RUNFORGE_INPUT_DIR/train.json"
 export EVAL_CONFIG="$RUNFORGE_INPUT_DIR/eval.json"

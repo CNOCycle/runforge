@@ -4,8 +4,10 @@
 
 After a Docker restart, host reboot, or killed job, inspect the previous work
 before starting another runner. The report root holds durable experiments and,
-while a command runs, its temporary workdir. Keep reports and any checkpoints
-on persistent storage if they must survive container replacement.
+while a Git or directory-snapshot command runs, its temporary workdir.
+Verified-directory commands run in the original source directory. Keep reports
+and any checkpoints on persistent storage if they must survive container
+replacement.
 
 run, retry, and launch automatically check existing inprogress or claimed
 experiments found in their initial selection, before starting any new attempt.

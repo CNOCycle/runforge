@@ -21,6 +21,7 @@ REPORT_ROOT/
       artifacts/
       inputs/              # rendered immutable input tree, when requested
       input-manifest.json  # input kinds and SHA-256 digests
+      .workspace/          # temporary Git worktree while executing
       claim/               # present only while a worker owns the experiment
       attempt-NNNN/        # archived prior attempt, created by retry
 ```
@@ -43,10 +44,16 @@ REPORT_ROOT/
     HASH8_NAME_SLUG_COUNT/
       source-manifest.json
       source/              # the captured copy
+      .workspace/          # temporary copy while executing
 ```
 
 They store `source-manifest.json` instead of `git.patch`. See
 [Source modes](source-modes.md).
+
+A directory-snapshot execution also materializes `.workspace/` inside its
+experiment. Verified-directory execution uses the original source directory
+and creates no workdir. Git and snapshot workdirs are normally removed after
+execution; an interrupted run can leave one behind.
 
 ## Matrix Artifacts
 
@@ -75,6 +82,7 @@ See [Matrices and mapping](../guides/matrices-and-mapping.md).
 | `status.json` | Planner, then worker | Yes |
 | `stdout.log`, `stderr.log` | Worker | Replaced per attempt |
 | `artifacts/` | The child command | Yes |
+| `.workspace/` | Worker, for Git and snapshot execution | Normally created and removed per execution |
 | `claim/` | Worker, while executing | Created and removed |
 | `attempt-NNNN/` | Retry | Written once per attempt |
 
