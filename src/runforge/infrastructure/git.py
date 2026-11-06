@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -20,6 +21,14 @@ class GitHead:
 
     commit: str
     branch: str
+
+
+@dataclass(frozen=True)
+class WorktreeRegistration:
+    """What the repository records about one linked worktree path."""
+
+    path: Path
+    locked: bool
 
 
 @dataclass(frozen=True)
@@ -66,12 +75,40 @@ class GitRepository:
         output = self._run(["ls-files", "--others", "--exclude-standard", "-z"]).stdout
         return [item.decode("utf-8", errors="replace") for item in output.split(b"\0") if item]
 
-    def create_detached_worktree(self, destination: Path, commit: str) -> Path:
-        """Create and return a detached worktree at a resolved commit."""
+    def create_detached_worktree(self, destination: Path, commit: str, *, force: bool = False) -> Path:
+        """Create and return a detached worktree at a resolved commit.
+
+        ``force`` lets a caller that owns ``destination`` replace a stale
+        registration left when that path was deleted without deregistering it.
+        Git still refuses a non-empty existing destination.
+        """
         worktree = Path(destination).expanduser().resolve()
         resolved_commit = self.resolve_commit(commit)
-        self._run(["worktree", "add", "--detach", str(worktree), resolved_commit])
+        arguments = ["worktree", "add", "--detach"]
+        if force:
+            arguments.append("--force")
+        self._run([*arguments, str(worktree), resolved_commit])
         return worktree
+
+    def worktree_registration(self, worktree: Path) -> WorktreeRegistration | None:
+        """Return this repository's registration for *worktree*, present on disk or not.
+
+        The final path component is not resolved, so a link at *worktree* never
+        matches the worktree it points to. NUL-delimited output (Git 2.36 or
+        later) keeps a path containing a newline in one record.
+        """
+        target = _unresolved_leaf(worktree)
+        output = self._run(
+            ["worktree", "list", "--porcelain", "-z"], "list Git worktrees (requires Git 2.36 or later)"
+        ).stdout
+        for lines in _porcelain_records(output):
+            if not lines[0].startswith("worktree "):
+                continue
+            registered = Path(lines[0].removeprefix("worktree "))
+            if _unresolved_leaf(registered) == target:
+                locked = any(line == "locked" or line.startswith("locked ") for line in lines[1:])
+                return WorktreeRegistration(path=registered, locked=locked)
+        return None
 
     def remove_worktree(self, worktree: Path, *, force: bool = True) -> None:
         """Remove a worktree, forcing cleanup by default for patched worktrees."""
@@ -156,3 +193,24 @@ class GitRepository:
             message = result.stderr.decode("utf-8", errors="replace").strip()
             raise GitOperationError(f"Could not {operation}: {message or 'unknown Git error'}")
         return result
+
+
+def _unresolved_leaf(path: Path) -> Path:
+    """Resolve every component except the last, so links at the leaf stay distinct."""
+    expanded = Path(path).expanduser()
+    return expanded.parent.resolve() / expanded.name
+
+
+def _porcelain_records(output: bytes) -> list[list[str]]:
+    """Split NUL-delimited `worktree list --porcelain -z` output into records of fields."""
+    records: list[list[str]] = []
+    current: list[str] = []
+    for field in output.split(b"\0"):
+        if field:
+            current.append(os.fsdecode(field))
+        elif current:
+            records.append(current)
+            current = []
+    if current:
+        records.append(current)
+    return records

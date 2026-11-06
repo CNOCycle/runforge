@@ -3,9 +3,9 @@
 ## Before starting again after a restart
 
 After a Docker restart, host reboot, or killed job, inspect the previous work
-before starting another runner. The report root holds durable experiments;
-the workspace root holds temporary source checkouts. Keep reports and any
-checkpoints on persistent storage if they must survive container replacement.
+before starting another runner. The report root holds durable experiments and,
+while a command runs, its temporary workdir. Keep reports and any checkpoints
+on persistent storage if they must survive container replacement.
 
 run, retry, and launch automatically check existing inprogress or claimed
 experiments found in their initial selection, before starting any new attempt.
@@ -14,8 +14,8 @@ Each claim is assessed from local evidence:
 | Assessment | Meaning | Startup output |
 | --- | --- | --- |
 | active | The claim's HOSTNAME:PID runs on this host and started before the claim. | Nothing: a concurrent worker is normal. |
-| stale | The process exited (including an unreaped zombie), its PID is gone, or the PID was reused by a process started after the claim. | Owner, matching workspace, and the forced-retry command to run after confirmation. |
-| unknown | Another host, a custom RUNFORGE_CLAIM_OWNER, a missing or unreadable claim, or a running PID whose start time cannot be read. | Owner and workspace details. A running PID gets a ps check instead of a retry command. |
+| stale | The process exited (including an unreaped zombie), its PID is gone, or the PID was reused by a process started after the claim. | Owner, any workdir present, and the forced-retry command to run after confirmation. |
+| unknown | Another host, a custom RUNFORGE_CLAIM_OWNER, a missing or unreadable claim, or a running PID whose start time cannot be read. | Owner and any workdir present. A running PID gets a ps check instead of a retry command. |
 
 Process start times come from Linux /proc; elsewhere a running PID is unknown.
 The report does not clear claims, change status, retry work, or block unrelated
@@ -23,24 +23,21 @@ runnable experiments. Stale means the recorded worker process is gone; a child
 it started may still run, so confirm both before recovery. These are
 observations, not a guarantee about activity when execution acquires its claim.
 
-Startup reuses the initial report scan. For affected records, it searches each
-current workspace parent once: RUNFORGE_WORKSPACE_ROOT when configured, otherwise
-`runforge-workspaces` beside the recorded Git or snapshot source.
-It does not search every disk or a previous container's workspace location.
-Use the explicit checks below for workspaces and experiments outside the selected
-paths. Verified-directory execution creates no workspace.
+Startup reuses the initial report scan. For each affected record it also reports
+a `.workspace/` workdir left inside the experiment. Use the explicit checks below
+for experiments outside the selected paths.
 
 ```bash
 runforge discover "$REPORT_ROOT"
 runforge discover "$REPORT_ROOT" --older-than 6h
-runforge workspaces "$WORKSPACE_ROOT"
 ```
 
 The first scan includes recently interrupted work too. The second adds age
 and local process hints to old inprogress records; it does not filter the list
-or establish that they expired. An interruption can happen before a workspace
-exists or after one is removed, so inspect reports even when no workspaces
-remain. A workspace may also belong to a currently running worker.
+or establish that they expired. An interruption can happen before a workdir
+exists or after it is removed, so a missing `.workspace/` says nothing about
+whether the old process stopped. A present one may also belong to a currently
+running worker.
 
 Use the state and ownership evidence to select the next action:
 
@@ -57,23 +54,17 @@ Ordinary run continues unrelated runnable plans and skips inprogress or claimed
 work. A successful exit can therefore leave interrupted experiments unfinished.
 Inspect the summary and discover again after recovery.
 
-### Connect a leftover workspace to its experiment
+### Identify the owner of an interrupted experiment
 
-Workspace listing prints its recorded host, PID, owner, and source. For an exact
-match, read the workspace manifest and the candidate experiment's claim:
+The experiment's claim records who held it and since when:
 
 ```bash
-python3 -m json.tool "$WORKSPACE/runforge-worker.json"
 python3 -m json.tool "$EXPERIMENT/claim/owner.json"
 ```
 
-Match the manifest's worker_id to the claim's token. Owner or PID alone is not
-unique: one runner can process several experiments, and PIDs can be reused.
-The startup report performs this join for affected experiments under its selected
-paths and current workspace parents. These manual checks work when investigating
-other workspace locations. A missing or unreadable record means the association
-is unknown; source identity alone is insufficient to establish which experiment
-owns a workspace.
+Its owner is HOSTNAME:PID unless RUNFORGE_CLAIM_OWNER was set. Owner or PID
+alone does not prove the process is gone: PIDs can be reused, and a child the
+worker started may outlive it.
 
 For Docker or a job scheduler, use its container/job history to establish that
 the old execution stopped. A PID absent from the current container does not
@@ -99,25 +90,22 @@ not supported: it skips that state without clearing the claim. Preserve the
 record and investigate that claim separately; do not label it failed just to
 make retry accept it.
 
-Retry starts the recorded command as a new attempt. Git and snapshot sources use
-a fresh workspace; verified-directory sources execute in the original directory.
-It does not resume the old process. Ordinary retry moves saved outputs into
+Retry starts the recorded command as a new attempt. For Git and snapshot sources
+it deletes any `.workspace/` the interrupted run left and builds a fresh one;
+the old workdir is never reused. Verified-directory sources execute in the
+original directory. Retry does not resume the old process. Ordinary retry moves saved outputs into
 attempt-NNNN and starts with empty artifacts. To make previous artifacts available
 at their usual paths for an application that already supports checkpoint recovery,
 use [retry --reuse-artifacts](#reuse-artifacts-for-application-checkpoint-recovery).
 It can be combined with --force after the same independent ownership check.
 
-After preserving anything needed from a confirmed abandoned workspace, remove
-that exact workspace and inspect the durable report again:
+Copy anything you need out of a leftover `.workspace/` before retrying; retry
+deletes it. Then inspect the durable report again:
 
 ```bash
-runforge workspaces "$WORKSPACE_ROOT" --remove "$WORKSPACE"
 runforge discover "$REPORT_ROOT"
 runforge run "$REPORT_ROOT"
 ```
-
-Workspace removal is optional and separate from retry. It does not clear an
-experiment's claim or change its status. Keep live and unidentified workspaces.
 
 ## Inspect published work
 
@@ -290,8 +278,8 @@ Already completed work remains completed and is not reissued.
 
 ## Interrupted runs and explicit retry
 
-A killed process can leave a workspace, inprogress status, and a claim behind.
-RunForge cannot resume the process or workspace, and does not infer abandonment
+A killed process can leave a `.workspace/` workdir, inprogress status, and a
+claim behind. RunForge cannot resume the process or workdir, and does not infer abandonment
 from age. First independently establish that the worker and child processes
 have stopped, using the recorded host/owner and external process or job evidence.
 RUNFORGE_CLAIM_OWNER can identify a scheduler job when host:PID is insufficient.
@@ -344,7 +332,7 @@ runforge retry --force --reuse-artifacts "$EXPERIMENT"
 The immutable recorded command and configuration are unchanged. The application
 must already enable checkpoint loading from RUNFORGE_ARTIFACT_DIR (or its
 recorded artifact-path argument). RunForge does not add resume flags, select a
-checkpoint format, verify restored progress, or reuse the old worker workspace.
+checkpoint format, verify restored progress, or reuse the old workdir.
 An empty artifact directory is valid to copy; it does not establish that a
 checkpoint exists or that any progress was resumed.
 
@@ -374,22 +362,20 @@ delete archives to bypass a collision or mark a partial seed runnable by editing
 status. There is no automatic interrupted-preparation repair or guarantee of
 power-loss atomicity.
 
-## Temporary workspace identity and cleanup
+## Temporary workdir
 
-```bash
-runforge workspaces "$WORKSPACE_ROOT"
-runforge workspaces "$WORKSPACE_ROOT" --remove "$WORKSPACE"
-```
-
-Listing is read-only and shows recorded source identity/reference, host, PID,
-owner, and start time, or explicit unknown identity. These records do not prove
-that a process is alive or abandoned. Confirm independently before removal.
-When the manifest is missing or unreadable, a matching directory name alone
-does not establish that the directory is a RunForge workspace. Inspect it before
-removal.
-Only explicitly named paths found directly under the workspace root can be
-removed. Git worktrees are deregistered rather than merely deleted.
-
-Set RUNFORGE_WORKSPACE_ROOT to an existing writable workspace parent for one location to inspect
-and clean. It is a temporary workspace root, not a report root. Experiment
-report directories, saved logs/artifacts, and immutable source records remain.
+Git and directory-snapshot executions build their workdir at `.workspace/`
+inside the experiment directory and remove it when the command exits, whether
+it succeeded or failed. Git workdirs are deregistered from the source
+repository rather than merely deleted. An execution that finds a leftover
+`.workspace/` (from a killed worker, or deleted by hand without deregistering)
+deletes it while holding the experiment's claim and builds a fresh one; a
+symbolic link there is removed without following it. A Git worktree left
+locked with `git worktree lock` is treated as a deliberate hold: the execution
+fails, naming the path, and leaves the directory and lock untouched. Inspect
+it, run `git worktree unlock PATH` in the source repository, then retry.
+A command that deletes its own workdir, or a worktree creation that Git
+registers before failing (such as a failing `post-checkout` hook), is still
+removed and deregistered afterwards.
+Experiment report directories, saved logs/artifacts, and immutable source
+records are untouched.

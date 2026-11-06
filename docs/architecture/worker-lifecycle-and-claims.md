@@ -53,8 +53,8 @@ the process exits; future publication requires another invocation.
 
 ## Failure and recovery
 
-An abrupt kill can bypass Python cleanup, leaving a workspace, claim, and
-inprogress status. There is no process reattachment, checkpoint selection,
+An abrupt kill can bypass Python cleanup, leaving the experiment's `.workspace/`
+workdir, claim, and inprogress status. There is no process reattachment, checkpoint selection,
 liveness lease, or automatic recovery. Explicit forced retry requires independent
 operator confirmation; it is not a guarantee against a still-live prior child.
 Previous attempt history is archived before another attempt begins. Normal retry
@@ -67,7 +67,7 @@ interrupted staging or archive conflicts require manual inspection. Applications
 own checkpoint loading; RunForge does not change the recorded command or restore
 an old process. Ordinary retry still starts with empty artifacts.
 
-Workspace identity is diagnostic only. Listing/inspection is not an abandonment
-check. Cleanup removes only explicitly named discovered workspaces, including
-Git worktree deregistration. The workspace root (RUNFORGE_WORKSPACE_ROOT) is separate from the
-persistent experiment report root.
+The workdir lives at `.workspace/` inside the experiment, so the claim that
+grants execution also grants ownership of that path. The next claimed execution
+deletes a leftover workdir (deregistering a Git worktree) and builds a fresh
+one; a leftover is never reused, and its presence is not an abandonment check.

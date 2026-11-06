@@ -33,16 +33,14 @@ Workers running Git-backed plans must reach the recorded repository. A
 same path on every worker. A `directory-snapshot` plan carries its source in the
 experiment directory, so the original source directory can be absent.
 
-## Worker Workspace Placement
+## Worker Workdir Placement
 
-By default a worker places Git and directory-snapshot workspaces under a
-`runforge-workspaces` directory beside the recorded source. Set
-`RUNFORGE_WORKSPACE_ROOT` to use one explicit directory instead, for example
-when the source's parent is absent, read-only, or too small. The configured
-directory must already exist and be writable by the worker; RunForge does not
-create it, and does not require it to be shared
-across hosts (each worker still builds and tears down its own private
-workspace there).
+A worker builds each Git or directory-snapshot workdir at `.workspace/` inside
+the experiment directory, so it lives on the shared report storage and is
+visible from every host. Only the worker holding the experiment's claim builds,
+deletes, or replaces it. Budget report storage for one source copy per running
+experiment, and expect checkout and copy speed to follow that filesystem;
+there is no option to place workdirs on separate local scratch.
 
 ## What Is And Is Not Proven
 

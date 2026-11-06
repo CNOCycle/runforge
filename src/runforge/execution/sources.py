@@ -2,8 +2,9 @@
 
 Each source mode answers the same question differently: given a recorded
 source, produce a verified working directory, and clean up afterwards. Git
-builds a detached worktree, verified-directory re-checks an external path in
-place, and directory-snapshot materializes its captured copy in isolation.
+builds a detached worktree and directory-snapshot materializes its captured
+copy, both in the experiment's own ``.workspace`` directory; verified-directory
+re-checks an external path in place.
 
 Expressing that as one strategy per mode keeps each mode's setup, verification,
 and teardown in one place, and lets the executor prepare a source without
@@ -15,10 +16,8 @@ to carry.
 from __future__ import annotations
 
 import hashlib
-import os
+import shlex
 import shutil
-import socket
-import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -26,107 +25,74 @@ from pathlib import Path
 from typing import Generic, Literal, TypeVar
 
 from runforge.execution.errors import WorkerError
-from runforge.infrastructure.claims import ExperimentClaim
 from runforge.infrastructure.directory_scan import DirectoryScanError, ScannedFile, scan_directory
 from runforge.infrastructure.git import GitOperationError, GitRepository
-from runforge.infrastructure.json_store import JsonStoreError, load_json_object, save_json_object
-from runforge.infrastructure.paths import is_safe_directory
-from runforge.infrastructure.slug import slugify
+from runforge.infrastructure.paths import is_absent, is_safe_directory
 from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.schemas.directory_source import (
-    DIRECTORY_SNAPSHOT_DIRECTORY,
     DirectorySnapshotSource,
     DirectorySourceEntry,
     DirectorySourceManifest,
     VerifiedDirectorySource,
 )
 from runforge.schemas.source import GitSource
-from runforge.schemas.worker_manifest import WORKER_MANIFEST_FILE, WorkerManifest
 
 
 SourceT = TypeVar("SourceT")
 
-WORKSPACE_ROOT_VARIABLE = "RUNFORGE_WORKSPACE_ROOT"
 
+def _remove_leftover_workspace(experiment: ExperimentDirectory, repository: GitRepository | None = None) -> None:
+    """Delete a workdir an interrupted execution left behind before building a fresh one.
 
-def _configured_workspace_root() -> Path | None:
-    """Resolve the operator-configured worker workspace root, if any.
-
-    A blank value falls back to the root beside the recorded source.
+    Callers hold the experiment's claim, so no other execution owns this path.
+    A leftover is never reused: it can hold a killed command's partial output
+    and, for Git, an already-applied patch. A locked Git worktree is a deliberate
+    refusal, so it is left untouched and the execution fails instead.
     """
-    configured = os.environ.get(WORKSPACE_ROOT_VARIABLE, "").strip()
-    return Path(configured).expanduser().resolve() if configured else None
-
-
-def workspace_root_for(source_path: Path) -> Path:
-    """Return the configured root or the root beside the recorded source."""
-    return _configured_workspace_root() or source_path.parent / "runforge-workspaces"
-
-
-_WORKSPACE_NAME_ATTEMPTS = 5
-
-
-def _worker_workspace_name(project: str) -> str:
-    """Identify the project and a unique execution in the common root."""
-    project_name = slugify(project, "source").rstrip("-._")
-    return f"{project_name}-{uuid.uuid4().hex}"
-
-
-def _prepare_workspace_root(source_path: Path) -> Path:
-    """Create the default root; explicitly configured roots must already exist."""
-    parent = workspace_root_for(source_path)
-    if _configured_workspace_root() is None:
-        try:
-            parent.mkdir(exist_ok=True)
-        except OSError as error:
-            raise WorkerError(f"Could not create worker workspace root {parent}: {error}") from error
-    return parent
-
-
-def _reserve_worker_workspace(parent: Path, project: str) -> Path:
-    """Create and return one empty, descriptively-named worker workspace directory."""
-    last_error: OSError | None = None
-    for _ in range(_WORKSPACE_NAME_ATTEMPTS):
-        candidate = parent / _worker_workspace_name(project)
-        try:
-            candidate.mkdir(parents=False)
-            return candidate
-        except FileExistsError as error:
-            last_error = error
-            continue
-        except OSError as error:
-            raise WorkerError(f"Could not create worker workspace under {parent}: {error}") from error
-    raise WorkerError(f"Could not create a unique worker workspace under {parent}: {last_error}")
-
-
-def _write_worker_manifest(
-    workspace: Path,
-    *,
-    source_kind: Literal["git", "directory-snapshot"],
-    source_identity: str,
-    source_reference: str,
-    claim: ExperimentClaim,
-) -> None:
-    """Persist the versioned manifest identifying who built one worker workspace and from what."""
-    manifest = WorkerManifest(
-        source_kind=source_kind,
-        source_identity=source_identity,
-        source_reference=source_reference,
-        host=socket.gethostname(),
-        pid=os.getpid(),
-        owner=claim.owner,
-        worker_id=claim.token,
-        started_at=claim.acquired_at,
-    )
+    workspace = experiment.workspace
+    if repository is not None:
+        _deregister_leftover_worktree(repository, workspace)
+    if is_absent(workspace):
+        return
     try:
-        save_json_object(workspace / WORKER_MANIFEST_FILE, manifest.to_dict())
-    except (OSError, JsonStoreError) as error:
-        raise WorkerError(f"Could not write worker workspace manifest: {error}") from error
+        # A link is removed itself; never follow it to delete what it points at.
+        if is_safe_directory(workspace):
+            shutil.rmtree(workspace)
+        else:
+            workspace.unlink()
+    except OSError as error:
+        raise WorkerError(f"Could not remove leftover workdir {workspace}: {error}") from error
 
 
-def load_worker_manifest(workspace: Path) -> WorkerManifest:
-    """Load the versioned manifest inside one worker workspace directory, for read-only inspection."""
-    return WorkerManifest.from_dict(load_json_object(workspace / WORKER_MANIFEST_FILE))
+def _deregister_leftover_worktree(repository: GitRepository, workspace: Path) -> None:
+    """Drop the source repository's record of a leftover worktree at *workspace*.
+
+    A registration whose directory was deleted by hand is cleared too, so the
+    fresh worktree can be added at the same path.
+    """
+    try:
+        registration = repository.worktree_registration(workspace)
+    except GitOperationError as error:
+        raise WorkerError(f"Could not inspect leftover workdir {workspace}: {error}") from error
+    if registration is None:
+        return
+    if registration.locked:
+        unlock = shlex.join(["git", "-C", str(repository.root), "worktree", "unlock", str(workspace)])
+        raise WorkerError(
+            f"Leftover workdir {workspace} is a locked Git worktree; inspect it, then run "
+            f"{unlock} before executing this experiment again"
+        )
+    if workspace.is_symlink():
+        # Removing through Git would follow the link; the forced add replaces
+        # this unlocked registration once the link itself is gone.
+        return
+    try:
+        repository.remove_worktree(workspace)
+    except GitOperationError:
+        # An unlocked registration that Git cannot remove (for example, its
+        # `.git` file is gone) is overridden by the forced add; the directory
+        # itself is deleted by the caller.
+        pass
 
 
 class SourcePreparation(ABC, Generic[SourceT]):
@@ -134,9 +100,7 @@ class SourcePreparation(ABC, Generic[SourceT]):
 
     @abstractmethod
     @contextmanager
-    def working_directory(
-        self, experiment: ExperimentDirectory, source: SourceT, claim: ExperimentClaim
-    ) -> Iterator[Path]:
+    def working_directory(self, experiment: ExperimentDirectory, source: SourceT) -> Iterator[Path]:
         """Verify the source and yield the directory the command should run in."""
         raise NotImplementedError
 
@@ -145,45 +109,51 @@ class GitWorktreePreparation(SourcePreparation[GitSource]):
     """Build a detached worktree at the recorded commit and apply any patch."""
 
     @contextmanager
-    def working_directory(
-        self, experiment: ExperimentDirectory, source: GitSource, claim: ExperimentClaim
-    ) -> Iterator[Path]:
+    def working_directory(self, experiment: ExperimentDirectory, source: GitSource) -> Iterator[Path]:
         try:
             repository = GitRepository.locate(source.repository)
         except GitOperationError as error:
             raise WorkerError(str(error)) from error
 
-        worktree = _reserve_worker_workspace(_prepare_workspace_root(repository.root), repository.root.name)
+        # The caller holds the experiment's claim, which makes the fixed workdir path ours.
+        _remove_leftover_workspace(experiment, repository)
+        worktree = experiment.workspace
         try:
-            repository.create_detached_worktree(worktree, source.commit)
-            _write_worker_manifest(
-                worktree,
-                source_kind="git",
-                source_identity=str(repository.root),
-                source_reference=source.commit,
-                claim=claim,
-            )
+            repository.create_detached_worktree(worktree, source.commit, force=True)
             _apply_recorded_patch(repository, worktree, experiment, source.patch_file, source.patch_sha256)
             yield worktree
         except GitOperationError as error:
             raise WorkerError(str(error)) from error
         finally:
-            if worktree.exists():
-                try:
-                    repository.remove_worktree(worktree)
-                except GitOperationError as error:
-                    raise WorkerError(f"Could not clean up worktree: {error}") from error
+            # Leftover removal emptied this path, so anything here now came from
+            # this execution, including a worktree Git registered before failing.
+            _remove_created_worktree(repository, worktree)
+
+
+def _remove_created_worktree(repository: GitRepository, worktree: Path) -> None:
+    """Remove and deregister whatever this execution's worktree add left at *worktree*.
+
+    Covers a completed add, an add that registered the worktree before failing
+    (for example, a failing post-checkout hook), and a command that deleted or
+    replaced its own working directory.
+    """
+    try:
+        if worktree.is_symlink():
+            # The command replaced its workdir with a link; never follow it.
+            worktree.unlink()
+        if repository.worktree_registration(worktree) is not None:
+            repository.remove_worktree(worktree)
+        if not is_absent(worktree):
+            shutil.rmtree(worktree)
+    except (GitOperationError, OSError) as error:
+        raise WorkerError(f"Could not clean up worktree: {error}") from error
 
 
 class VerifiedDirectoryPreparation(SourcePreparation[VerifiedDirectorySource]):
     """Re-verify an external directory and execute it where it stands."""
 
     @contextmanager
-    def working_directory(
-        self, experiment: ExperimentDirectory, source: VerifiedDirectorySource, claim: ExperimentClaim
-    ) -> Iterator[Path]:
-        # No ephemeral workspace is built here, so there is nothing to manifest;
-        # `claim` is accepted only to satisfy the shared SourcePreparation signature.
+    def working_directory(self, experiment: ExperimentDirectory, source: VerifiedDirectorySource) -> Iterator[Path]:
         if not is_safe_directory(source.path):
             raise WorkerError(f"Verified-directory source is missing or not a directory: {source.path}")
         _verify_directory_matches_manifest(
@@ -197,12 +167,10 @@ class VerifiedDirectoryPreparation(SourcePreparation[VerifiedDirectorySource]):
 
 
 class DirectorySnapshotPreparation(SourcePreparation[DirectorySnapshotSource]):
-    """Materialize the captured copy in an isolated workspace and verify it again."""
+    """Materialize the captured copy in the experiment's workdir and verify it again."""
 
     @contextmanager
-    def working_directory(
-        self, experiment: ExperimentDirectory, source: DirectorySnapshotSource, claim: ExperimentClaim
-    ) -> Iterator[Path]:
+    def working_directory(self, experiment: ExperimentDirectory, source: DirectorySnapshotSource) -> Iterator[Path]:
         snapshot_dir = experiment.snapshot_source_directory
         if not is_safe_directory(snapshot_dir):
             raise WorkerError(f"Captured directory-snapshot source is missing: {snapshot_dir}")
@@ -212,16 +180,9 @@ class DirectorySnapshotPreparation(SourcePreparation[DirectorySnapshotSource]):
             source.tree_digest,
             changed_message="Captured directory-snapshot source has changed since planning",
         )
-        container = _reserve_worker_workspace(_prepare_workspace_root(source.original_path), source.original_path.name)
+        _remove_leftover_workspace(experiment)
+        workspace = experiment.workspace
         try:
-            _write_worker_manifest(
-                container,
-                source_kind="directory-snapshot",
-                source_identity=str(source.original_path),
-                source_reference=source.tree_digest,
-                claim=claim,
-            )
-            workspace = container / DIRECTORY_SNAPSHOT_DIRECTORY
             try:
                 shutil.copytree(snapshot_dir, workspace)
             except OSError as error:
@@ -236,7 +197,8 @@ class DirectorySnapshotPreparation(SourcePreparation[DirectorySnapshotSource]):
             )
             yield workspace
         finally:
-            shutil.rmtree(container)
+            if not is_absent(workspace):
+                shutil.rmtree(workspace)
 
 
 _PREPARATIONS: tuple[tuple[type, SourcePreparation], ...] = (

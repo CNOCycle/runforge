@@ -1,114 +1,163 @@
-"""Tests for worker workspace naming, reservation, and manifests."""
+"""Tests for removing a workdir an interrupted execution left inside an experiment."""
 
 from __future__ import annotations
 
-import os
-import re
-import socket
-from concurrent.futures import ThreadPoolExecutor
+import shlex
 
 import pytest
 
 import runforge.execution.sources as sources_module
 from runforge.execution.errors import WorkerError
-from runforge.infrastructure.claims import ExperimentClaim
-from runforge.infrastructure.json_store import JsonStoreError, load_json_object, save_json_object
-from runforge.schemas.worker_manifest import WORKER_MANIFEST_FILE, WorkerManifestError
+from runforge.infrastructure.git import GitOperationError, WorktreeRegistration
+from runforge.infrastructure.storage import ExperimentDirectory
 
 
-def test_workspace_name_contains_project_and_unique_id():
-    name = sources_module._worker_workspace_name("repo_A")
-    assert re.fullmatch(r"repo_A-[0-9a-f]{32}", name)
+class _Repository:
+    """Records removal requests against one configurable worktree registration."""
+
+    root = "/repositories/repo A;$(touch pwned)"
+
+    def __init__(self, *, registered: bool = True, locked: bool = False, removal_fails: bool = False) -> None:
+        self.registered = registered
+        self.locked = locked
+        self.removal_fails = removal_fails
+        self.removed = []
+
+    def worktree_registration(self, worktree):
+        return WorktreeRegistration(path=worktree, locked=self.locked) if self.registered else None
+
+    def remove_worktree(self, worktree):
+        self.removed.append(worktree)
+        if self.removal_fails:
+            raise GitOperationError("validation failed, cannot remove working tree")
 
 
-@pytest.mark.parametrize("raw_project", ["repo with spaces", "repo:windows?", "repo/with/slashes", "????"])
-def test_workspace_names_are_filesystem_safe(raw_project):
-    name = sources_module._worker_workspace_name(raw_project)
-    assert re.fullmatch(r"[A-Za-z0-9._-]+-[0-9a-f]{32}", name)
-    assert "/" not in name
+def test_workdir_is_a_hidden_directory_inside_the_experiment(tmp_path):
+    experiment = ExperimentDirectory(tmp_path / "exp")
+    assert experiment.workspace == tmp_path / "exp" / ".workspace"
 
 
-def test_reserve_worker_workspace_creates_a_directory(tmp_path):
-    result = sources_module._reserve_worker_workspace(tmp_path, "repo_A")
-    assert result.is_dir()
-    assert result.parent == tmp_path
-    assert re.fullmatch(r"repo_A-[0-9a-f]{32}", result.name)
+def test_removing_an_absent_workdir_is_a_no_op(tmp_path):
+    experiment = ExperimentDirectory(tmp_path)
+    sources_module._remove_leftover_workspace(experiment)
+    assert not experiment.workspace.exists()
 
 
-def test_concurrent_workers_reserve_distinct_directories(tmp_path):
-    worker_count = 24
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        workdirs = list(
-            pool.map(lambda _: sources_module._reserve_worker_workspace(tmp_path, "repo_A"), range(worker_count))
-        )
-    assert len(set(workdirs)) == worker_count
-    assert all(path.is_dir() and path.parent == tmp_path for path in workdirs)
+def test_a_leftover_directory_is_deleted(tmp_path):
+    experiment = ExperimentDirectory(tmp_path)
+    (experiment.workspace / "nested").mkdir(parents=True)
+    (experiment.workspace / "nested" / "partial.txt").write_text("partial", encoding="utf-8")
+
+    sources_module._remove_leftover_workspace(experiment)
+
+    assert not experiment.workspace.exists()
 
 
-def test_reserve_worker_workspace_retries_past_a_name_collision(tmp_path, monkeypatch):
-    (tmp_path / "taken").mkdir()
-    names = iter(["taken", "free"])
-    monkeypatch.setattr(sources_module, "_worker_workspace_name", lambda _: next(names))
-    assert sources_module._reserve_worker_workspace(tmp_path, "repo_A") == tmp_path / "free"
+def test_a_leftover_file_is_deleted(tmp_path):
+    experiment = ExperimentDirectory(tmp_path)
+    experiment.workspace.write_text("not a directory", encoding="utf-8")
+
+    sources_module._remove_leftover_workspace(experiment)
+
+    assert not experiment.workspace.exists()
 
 
-def test_reserve_worker_workspace_gives_up_after_repeated_collisions(tmp_path, monkeypatch):
-    (tmp_path / "taken").mkdir()
-    monkeypatch.setattr(sources_module, "_worker_workspace_name", lambda _: "taken")
-    with pytest.raises(WorkerError, match="Could not create a unique worker workspace"):
-        sources_module._reserve_worker_workspace(tmp_path, "repo_A")
+@pytest.mark.parametrize("registered", [False, True])
+def test_a_leftover_link_is_unlinked_without_touching_its_target(tmp_path, registered):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / ".git").write_text("gitdir: elsewhere", encoding="utf-8")
+    experiment = ExperimentDirectory(tmp_path / "exp")
+    experiment.root.mkdir()
+    experiment.workspace.symlink_to(target, target_is_directory=True)
+    repository = _Repository(registered=registered)
+
+    sources_module._remove_leftover_workspace(experiment, repository)
+
+    assert repository.removed == []
+    assert not experiment.workspace.is_symlink()
+    assert (target / ".git").is_file()
 
 
-def test_reserve_worker_workspace_reports_an_unusable_root_clearly(tmp_path):
-    with pytest.raises(WorkerError, match="Could not create worker workspace under"):
-        sources_module._reserve_worker_workspace(tmp_path / "does-not-exist", "repo_A")
+def test_a_registered_leftover_worktree_is_deregistered_through_git(tmp_path):
+    experiment = ExperimentDirectory(tmp_path)
+    experiment.workspace.mkdir()
+    repository = _Repository()
+
+    sources_module._remove_leftover_workspace(experiment, repository)
+
+    assert repository.removed == [experiment.workspace]
 
 
-def _claim() -> ExperimentClaim:
-    return ExperimentClaim(
-        token="81cf070577f54cfb991791368f7fc2c3", owner="node7:4127", acquired_at="2026-07-30T18:15:30.000000Z"
-    )
+def test_a_registration_whose_directory_was_deleted_is_still_deregistered(tmp_path):
+    experiment = ExperimentDirectory(tmp_path)
+    repository = _Repository()
+
+    sources_module._remove_leftover_workspace(experiment, repository)
+
+    assert repository.removed == [experiment.workspace]
 
 
-def test_write_worker_manifest_then_load_round_trips(tmp_path):
-    claim = _claim()
+def test_an_unremovable_unlocked_worktree_falls_back_to_deleting_the_directory(tmp_path):
+    experiment = ExperimentDirectory(tmp_path)
+    experiment.workspace.mkdir()
+    (experiment.workspace / ".git").write_text("gitdir: pruned", encoding="utf-8")
+    repository = _Repository(removal_fails=True)
 
-    sources_module._write_worker_manifest(
-        tmp_path,
-        source_kind="git",
-        source_identity="/repositories/repo_A",
-        source_reference="a" * 40,
-        claim=claim,
-    )
+    sources_module._remove_leftover_workspace(experiment, repository)
 
-    assert (tmp_path / WORKER_MANIFEST_FILE).is_file()
-    manifest = sources_module.load_worker_manifest(tmp_path)
-    assert manifest.source_kind == "git"
-    assert manifest.source_identity == "/repositories/repo_A"
-    assert manifest.source_reference == "a" * 40
-    assert manifest.host == socket.gethostname()
-    assert manifest.pid == os.getpid()
-    assert manifest.owner == claim.owner
-    assert manifest.worker_id == claim.token
-    assert manifest.started_at == claim.acquired_at
+    assert repository.removed == [experiment.workspace]
+    assert not experiment.workspace.exists()
 
 
-def test_load_worker_manifest_rejects_a_missing_manifest(tmp_path):
-    with pytest.raises(JsonStoreError, match="Could not read JSON object"):
-        sources_module.load_worker_manifest(tmp_path)
+@pytest.mark.parametrize("present", [True, False])
+def test_a_locked_leftover_worktree_fails_without_being_touched(tmp_path, present):
+    experiment = ExperimentDirectory(tmp_path)
+    if present:
+        experiment.workspace.mkdir()
+        (experiment.workspace / "keep.txt").write_text("locked by an operator", encoding="utf-8")
+    repository = _Repository(locked=True)
+
+    with pytest.raises(WorkerError, match=r"is a locked Git worktree; .*worktree unlock"):
+        sources_module._remove_leftover_workspace(experiment, repository)
+
+    assert repository.removed == []
+    if present:
+        assert (experiment.workspace / "keep.txt").read_text(encoding="utf-8") == "locked by an operator"
 
 
-def test_load_worker_manifest_rejects_an_invalid_manifest(tmp_path):
-    sources_module._write_worker_manifest(
-        tmp_path,
-        source_kind="git",
-        source_identity="/repositories/repo_A",
-        source_reference="a" * 40,
-        claim=_claim(),
-    )
-    payload = load_json_object(tmp_path / WORKER_MANIFEST_FILE)
-    payload["kind"] = "something_else"
-    save_json_object(tmp_path / WORKER_MANIFEST_FILE, payload)
+def test_an_unreadable_registration_list_fails_without_deleting(tmp_path):
+    experiment = ExperimentDirectory(tmp_path)
+    experiment.workspace.mkdir()
 
-    with pytest.raises(WorkerManifestError, match="Unsupported worker workspace manifest"):
-        sources_module.load_worker_manifest(tmp_path)
+    class _Unreadable(_Repository):
+        def worktree_registration(self, worktree):
+            raise GitOperationError("not a git repository")
+
+    with pytest.raises(WorkerError, match="Could not inspect leftover workdir"):
+        sources_module._remove_leftover_workspace(experiment, _Unreadable())
+
+    assert experiment.workspace.is_dir()
+
+
+def test_a_removal_failure_names_the_workdir(tmp_path, monkeypatch):
+    experiment = ExperimentDirectory(tmp_path)
+    experiment.workspace.mkdir()
+
+    def refuse(path):
+        raise PermissionError("read-only filesystem")
+
+    monkeypatch.setattr(sources_module.shutil, "rmtree", refuse)
+    with pytest.raises(WorkerError, match=r"Could not remove leftover workdir .*\.workspace: read-only filesystem"):
+        sources_module._remove_leftover_workspace(experiment)
+
+
+def test_the_unlock_hint_is_a_shell_safe_command(tmp_path):
+    experiment = ExperimentDirectory(tmp_path / "report root with spaces" / "exp $HOME")
+    repository = _Repository(locked=True)
+
+    with pytest.raises(WorkerError) as raised:
+        sources_module._remove_leftover_workspace(experiment, repository)
+
+    hint = str(raised.value).split(" then run ", 1)[1].removesuffix(" before executing this experiment again")
+    assert shlex.split(hint) == ["git", "-C", repository.root, "worktree", "unlock", str(experiment.workspace)]

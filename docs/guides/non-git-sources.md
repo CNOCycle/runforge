@@ -10,7 +10,7 @@ source is copied.
 | | `verified-directory` | `directory-snapshot` |
 | --- | --- | --- |
 | Source stored in the experiment | No, only a manifest and the path | Yes, a complete copy |
-| Executes from | The original directory, in place | An isolated temporary workspace |
+| Executes from | The original directory, in place | A temporary `.workspace/` copy inside the experiment |
 | Survives the original being edited | No, execution fails | Yes |
 | Source available without the original directory | No | Yes |
 | Storage cost per experiment | Manifest only | Full source tree |
@@ -78,13 +78,11 @@ EXPERIMENT_DIR/
 ```
 
 Before execution the worker validates manifest membership, digests, executable
-bits, and the full-tree digest, materializes the verified source in an isolated
-temporary workspace, runs there, preserves logs and artifacts in the experiment
-directory, and removes the workspace. The original source directory can be
-missing. By default, the worker creates `runforge-workspaces` beside its recorded
-path, so that path's parent must exist and be writable on the execution machine.
-If it is unavailable, create a writable directory and set
-`RUNFORGE_WORKSPACE_ROOT` to that existing directory before starting the worker.
+bits, and the full-tree digest, copies the verified source to `.workspace/`
+inside the experiment, verifies the copy again, runs there, preserves logs and
+artifacts in the experiment directory, and removes the copy. The original source
+directory can be missing; only the experiment directory must be writable on the
+execution machine.
 
 The captured source can be used on another machine, but the entire experiment
 is not automatically relocatable. `{ARTIFACT_DIR}` and `{INPUT_DIR}` are

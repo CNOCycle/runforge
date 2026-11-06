@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import os
-import re
 import shutil
 import sys
 from pathlib import Path
@@ -13,7 +10,7 @@ import pytest
 
 import runforge.execution.sources as sources_module
 import runforge.execution.worker as worker_module
-from runforge.execution.worker import WorkerError, WorkerProgressEvent, run_experiment
+from runforge.execution.worker import BatchRequest, WorkerError, WorkerProgressEvent, execute_paths, run_experiment
 from runforge.infrastructure.claims import ClaimError, release_claim, try_acquire_claim
 from runforge.infrastructure.json_store import load_json_object
 from runforge.infrastructure.storage import ExperimentDirectory
@@ -21,12 +18,10 @@ from runforge.planning.inputs import InputTemplate
 from runforge.planning.planner import PlanRequest, plan_experiment
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
 from runforge.schemas.source import PinnedGitSource
-from runforge.schemas.worker_manifest import WorkerManifest
 from tests.support import create_git_repository, git
 
 
 FAILURE_EXIT_CODE = 7
-SHA256_DIGEST_LENGTH = 64
 
 
 def _repository(tmp_path: Path, script: str) -> Path:
@@ -157,8 +152,7 @@ def test_worker_executes_recorded_commit_and_patch_then_cleans_worktree(tmp_path
     status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
     assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "patched"
     worker_path = Path((experiment / "artifacts" / "worktree.txt").read_text(encoding="utf-8"))
-    assert worker_path.name.startswith("repository-")
-    assert worker_path.parent == repository.parent / "runforge-workspaces"
+    assert worker_path == ExperimentDirectory.resolve(experiment).workspace.resolve()
     assert not worker_path.exists()
     assert status.state == "completed"
     assert status.attempt == 1
@@ -168,142 +162,167 @@ def test_worker_executes_recorded_commit_and_patch_then_cleans_worktree(tmp_path
     assert str(worker_path) not in git(repository, "worktree", "list", "--porcelain")
 
 
-def test_worker_builds_git_worktree_under_the_configured_root(tmp_path, monkeypatch):
-    repository = _repository(
-        tmp_path,
-        (
-            "from pathlib import Path\n"
-            "import os\n"
-            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
-            "artifact_dir.joinpath('worktree.txt').write_text(str(Path.cwd()))\n"
-        ),
-    )
-    configured_root = tmp_path / "configured-root"
-    configured_root.mkdir()
-    monkeypatch.setenv(sources_module.WORKSPACE_ROOT_VARIABLE, str(configured_root))
-    experiment = plan_experiment(
+CWD_SCRIPT = (
+    "from pathlib import Path\n"
+    "import os\n"
+    "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
+    "artifact_dir.joinpath('cwd.txt').write_text(str(Path.cwd()))\n"
+    "artifact_dir.joinpath('listing.txt').write_text('\\n'.join(sorted(p.name for p in Path.cwd().iterdir())))\n"
+)
+
+
+def _git_experiment(tmp_path: Path, name: str, script: str = CWD_SCRIPT) -> Path:
+    repository = _repository(tmp_path, script)
+    return plan_experiment(
         PlanRequest(
-            name="configured-root",
+            name=name,
             command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
             output_root=tmp_path / "reports",
         )
     )
+
+
+def _listing(experiment: Path) -> list[str]:
+    return (experiment / "artifacts" / "listing.txt").read_text(encoding="utf-8").splitlines()
+
+
+def test_worker_removes_the_git_workdir_after_a_failing_command(tmp_path):
+    experiment = _git_experiment(tmp_path, "failing", f"raise SystemExit({FAILURE_EXIT_CODE})\n")
+
+    assert run_experiment(experiment) == FAILURE_EXIT_CODE
+
+    workspace = ExperimentDirectory.resolve(experiment).workspace
+    assert not workspace.exists()
+    assert str(workspace) not in git(tmp_path / "repository", "worktree", "list", "--porcelain")
+
+
+def test_worker_replaces_a_leftover_git_worktree_instead_of_reusing_it(tmp_path):
+    experiment = _git_experiment(tmp_path, "leftover-worktree")
+    workspace = ExperimentDirectory.resolve(experiment).workspace
+    git(tmp_path / "repository", "worktree", "add", "--detach", str(workspace), "HEAD")
+    (workspace / "left-by-killed-run.txt").write_text("partial", encoding="utf-8")
 
     assert run_experiment(experiment) == 0
 
-    worker_path = Path((experiment / "artifacts" / "worktree.txt").read_text(encoding="utf-8"))
-    assert worker_path.parent == configured_root
-    assert worker_path.parent != repository.parent
-    assert not worker_path.exists()
+    assert "left-by-killed-run.txt" not in _listing(experiment)
+    assert "train.py" in _listing(experiment)
+    assert not workspace.exists()
+    assert str(workspace) not in git(tmp_path / "repository", "worktree", "list", "--porcelain")
 
 
-def test_worker_reports_a_clear_error_for_an_unusable_configured_root(tmp_path, monkeypatch):
-    repository = _repository(tmp_path, "print('must not run')\n")
-    monkeypatch.setenv(sources_module.WORKSPACE_ROOT_VARIABLE, str(tmp_path / "does-not-exist"))
-    experiment = plan_experiment(
-        PlanRequest(
-            name="bad-root",
-            command=ExperimentCommand.argv((sys.executable, "train.py")),
-            source_path=repository,
-            output_root=tmp_path / "reports",
-        )
-    )
+def test_worker_recovers_from_a_hand_deleted_git_worktree(tmp_path):
+    experiment = _git_experiment(tmp_path, "stale-registration")
+    workspace = ExperimentDirectory.resolve(experiment).workspace
+    git(tmp_path / "repository", "worktree", "add", "--detach", str(workspace), "HEAD")
+    shutil.rmtree(workspace)
 
-    with pytest.raises(WorkerError, match="Could not create worker workspace under"):
+    assert run_experiment(experiment) == 0
+
+    assert "train.py" in _listing(experiment)
+    assert not workspace.exists()
+
+
+def test_worker_deregisters_a_workdir_the_command_deleted(tmp_path):
+    script = "import shutil\nfrom pathlib import Path\nshutil.rmtree(Path.cwd())\n"
+    experiment = _git_experiment(tmp_path, "self-deleting", script)
+    workspace = ExperimentDirectory.resolve(experiment).workspace
+
+    assert run_experiment(experiment) == 0
+
+    assert not workspace.exists()
+    assert str(workspace) not in git(tmp_path / "repository", "worktree", "list", "--porcelain")
+
+
+@pytest.mark.parametrize("deleted_by_hand", [False, True])
+def test_worker_refuses_a_locked_leftover_worktree_without_touching_it(tmp_path, deleted_by_hand):
+    experiment = _git_experiment(tmp_path, "locked-leftover")
+    workspace = ExperimentDirectory.resolve(experiment).workspace
+    repository = tmp_path / "repository"
+    git(repository, "worktree", "add", "--detach", str(workspace), "HEAD")
+    (workspace / "keep.txt").write_text("under investigation", encoding="utf-8")
+    git(repository, "worktree", "lock", "--reason", "investigating", str(workspace))
+    if deleted_by_hand:
+        shutil.rmtree(workspace)
+
+    with pytest.raises(WorkerError, match="locked Git worktree.*worktree unlock"):
         run_experiment(experiment)
 
+    assert not (experiment / "artifacts" / "listing.txt").exists()
+    assert ExperimentDirectory.resolve(experiment).load_status().state == "failed"
+    assert "locked investigating" in git(repository, "worktree", "list", "--porcelain")
+    if not deleted_by_hand:
+        assert (workspace / "keep.txt").read_text(encoding="utf-8") == "under investigation"
 
-def test_worker_git_workspace_name_matches_the_naming_contract(tmp_path):
-    repository = _repository(
-        tmp_path,
-        (
-            "from pathlib import Path\n"
-            "import os\n"
-            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
-            "artifact_dir.joinpath('worktree.txt').write_text(str(Path.cwd()))\n"
-        ),
-    )
+    # Once the operator unlocks it, an ordinary retry replaces the leftover.
+    git(repository, "worktree", "unlock", str(workspace))
+    result = execute_paths(BatchRequest((experiment,), retry=True))
+    assert result.completed == 1
+    assert "keep.txt" not in _listing(experiment)
+
+
+def test_worker_removes_a_worktree_git_registered_before_failing(tmp_path):
+    experiment = _git_experiment(tmp_path, "failing-hook")
+    repository = tmp_path / "repository"
+    hook = repository / ".git" / "hooks" / "post-checkout"
+    hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    workspace = ExperimentDirectory.resolve(experiment).workspace
+
+    with pytest.raises(WorkerError):
+        run_experiment(experiment)
+
+    assert not (experiment / "artifacts" / "listing.txt").exists()
+    assert not workspace.exists()
+    assert str(workspace) not in git(repository, "worktree", "list", "--porcelain")
+
+
+def test_worker_keeps_a_locked_leftover_under_a_path_containing_a_newline(tmp_path):
+    repository = _repository(tmp_path, CWD_SCRIPT)
     experiment = plan_experiment(
         PlanRequest(
-            name="naming",
+            name="newline",
             command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=repository,
-            output_root=tmp_path / "reports",
+            output_root=tmp_path / "reports\nlocked",
         )
     )
+    workspace = ExperimentDirectory.resolve(experiment).workspace
+    git(repository, "worktree", "add", "--detach", str(workspace), "HEAD")
+    git(repository, "worktree", "lock", str(workspace))
+
+    with pytest.raises(WorkerError, match="locked Git worktree"):
+        run_experiment(experiment)
+
+    assert (workspace / "train.py").is_file()
+    records = git(repository, "worktree", "list", "--porcelain", "-z").split("\0\0")
+    assert any(record.startswith(f"worktree {workspace}\0") and "\0locked" in record for record in records)
+
+
+def test_worker_replaces_a_leftover_plain_directory_for_a_git_source(tmp_path):
+    experiment = _git_experiment(tmp_path, "leftover-directory")
+    workspace = ExperimentDirectory.resolve(experiment).workspace
+    workspace.mkdir()
+    (workspace / "half-created.txt").write_text("partial", encoding="utf-8")
 
     assert run_experiment(experiment) == 0
 
-    worker_path = Path((experiment / "artifacts" / "worktree.txt").read_text(encoding="utf-8"))
-    assert re.fullmatch(
-        r"repository-[0-9a-f]{32}",
-        worker_path.name,
-    )
+    assert "half-created.txt" not in _listing(experiment)
+    assert not workspace.exists()
 
 
-def test_worker_git_workspace_manifest_records_source_and_claim_identity(tmp_path):
-    repository = _repository(
-        tmp_path,
-        (
-            "import shutil\n"
-            "from pathlib import Path\n"
-            "import os\n"
-            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
-            "shutil.copy('runforge-worker.json', artifact_dir / 'manifest.json')\n"
-        ),
-    )
-    commit = git(repository, "rev-parse", "HEAD")
-    experiment = plan_experiment(
-        PlanRequest(
-            name="manifest",
-            command=ExperimentCommand.argv((sys.executable, "train.py")),
-            source_path=repository,
-            output_root=tmp_path / "reports",
-        )
-    )
+def test_worker_unlinks_a_leftover_workdir_link_without_following_it(tmp_path):
+    experiment = _git_experiment(tmp_path, "leftover-link")
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    (target / "keep.txt").write_text("not ours", encoding="utf-8")
+    workspace = ExperimentDirectory.resolve(experiment).workspace
+    workspace.symlink_to(target, target_is_directory=True)
 
     assert run_experiment(experiment) == 0
 
-    manifest = WorkerManifest.from_dict(
-        json.loads((experiment / "artifacts" / "manifest.json").read_text(encoding="utf-8"))
-    )
-    assert manifest.source_kind == "git"
-    assert manifest.source_identity == str(repository.resolve())
-    assert manifest.source_reference == commit
-    assert manifest.pid == os.getpid()
-    assert manifest.worker_id
-    assert manifest.owner
-
-
-def test_worker_git_workspace_name_is_filesystem_safe_for_an_unsafe_repository_name(tmp_path):
-    repository = create_git_repository(
-        tmp_path / "repo with spaces:windows?",
-        {
-            "train.py": (
-                "from pathlib import Path\n"
-                "import os\n"
-                "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
-                "artifact_dir.joinpath('worktree.txt').write_text(str(Path.cwd()))\n"
-            )
-        },
-    )
-    experiment = plan_experiment(
-        PlanRequest(
-            name="unsafe-name",
-            command=ExperimentCommand.argv((sys.executable, "train.py")),
-            source_path=repository,
-            output_root=tmp_path / "reports",
-        )
-    )
-
-    assert run_experiment(experiment) == 0
-
-    worker_path = Path((experiment / "artifacts" / "worktree.txt").read_text(encoding="utf-8"))
-    assert re.fullmatch(
-        r"repo-with-spaces-windows-[0-9a-f]{32}",
-        worker_path.name,
-    )
+    assert (target / "keep.txt").read_text(encoding="utf-8") == "not ours"
+    assert not workspace.exists() and not workspace.is_symlink()
 
 
 def test_worker_executes_pinned_commit_after_current_checkout_advances(tmp_path):
@@ -675,53 +694,18 @@ def test_worker_executes_directory_snapshot_source_from_isolated_workspace(tmp_p
     status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
     workspace = Path((experiment / "artifacts" / "cwd.txt").read_text(encoding="utf-8"))
     assert (experiment / "artifacts" / "result.txt").read_text(encoding="utf-8") == "base"
-    assert workspace.name == "source"
-    assert workspace.parent.name.startswith("source-")
-    assert workspace.parent.parent == source.parent / "runforge-workspaces"
+    assert workspace == ExperimentDirectory.resolve(experiment).workspace.resolve()
     assert not workspace.exists()
     assert status.state == "completed"
     assert status.attempt == 1
     assert status.exit_code == 0
 
 
-def test_snapshot_uses_recorded_source_parent_when_original_is_missing(tmp_path):
-    source = _verified_directory_source(
-        tmp_path,
-        "from pathlib import Path\nimport os\n"
-        "Path(os.environ['RUNFORGE_ARTIFACT_DIR'], 'cwd').write_text(str(Path.cwd()))\n",
-    )
-    experiment = plan_experiment(
+def _snapshot_experiment(tmp_path: Path, name: str, script: str = CWD_SCRIPT) -> Path:
+    source = _verified_directory_source(tmp_path, script)
+    return plan_experiment(
         PlanRequest(
-            name="snapshot-missing-original",
-            command=ExperimentCommand.argv((sys.executable, "train.py")),
-            source_path=source,
-            output_root=tmp_path / "reports",
-            directory_source_mode="directory-snapshot",
-        )
-    )
-    shutil.rmtree(source)
-
-    assert run_experiment(experiment) == 0
-    cwd = Path((experiment / "artifacts" / "cwd").read_text(encoding="utf-8"))
-    assert cwd.parent.parent == tmp_path / "runforge-workspaces"
-
-
-def test_worker_materializes_directory_snapshot_under_the_configured_root(tmp_path, monkeypatch):
-    source = _verified_directory_source(
-        tmp_path,
-        (
-            "from pathlib import Path\n"
-            "import os\n"
-            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
-            "artifact_dir.joinpath('cwd.txt').write_text(str(Path.cwd()))\n"
-        ),
-    )
-    configured_root = tmp_path / "configured-root"
-    configured_root.mkdir()
-    monkeypatch.setenv(sources_module.WORKSPACE_ROOT_VARIABLE, str(configured_root))
-    experiment = plan_experiment(
-        PlanRequest(
-            name="snapshot-configured-root",
+            name=name,
             command=ExperimentCommand.argv((sys.executable, "train.py")),
             source_path=source,
             output_root=tmp_path / "reports",
@@ -729,90 +713,26 @@ def test_worker_materializes_directory_snapshot_under_the_configured_root(tmp_pa
         )
     )
 
+
+def test_worker_removes_the_snapshot_workdir_after_a_failing_command(tmp_path):
+    experiment = _snapshot_experiment(tmp_path, "snapshot-failing", f"raise SystemExit({FAILURE_EXIT_CODE})\n")
+
+    assert run_experiment(experiment) == FAILURE_EXIT_CODE
+
+    assert not ExperimentDirectory.resolve(experiment).workspace.exists()
+
+
+def test_worker_replaces_a_leftover_snapshot_workdir_instead_of_reusing_it(tmp_path):
+    experiment = _snapshot_experiment(tmp_path, "snapshot-leftover")
+    workspace = ExperimentDirectory.resolve(experiment).workspace
+    shutil.copytree(experiment / "source", workspace)
+    (workspace / "left-by-killed-run.txt").write_text("partial", encoding="utf-8")
+
+    # Reusing this copy would also fail the post-copy source verification.
     assert run_experiment(experiment) == 0
 
-    workspace = Path((experiment / "artifacts" / "cwd.txt").read_text(encoding="utf-8"))
-    assert workspace.parent.parent == configured_root
-
-
-def test_worker_snapshot_workspace_name_matches_the_naming_contract(tmp_path):
-    source = _verified_directory_source(
-        tmp_path,
-        (
-            "from pathlib import Path\n"
-            "import os\n"
-            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
-            "artifact_dir.joinpath('cwd.txt').write_text(str(Path.cwd()))\n"
-        ),
-    )
-    experiment = plan_experiment(
-        PlanRequest(
-            name="naming-snapshot",
-            command=ExperimentCommand.argv((sys.executable, "train.py")),
-            source_path=source,
-            output_root=tmp_path / "reports",
-            directory_source_mode="directory-snapshot",
-        )
-    )
-
-    assert run_experiment(experiment) == 0
-
-    workspace = Path((experiment / "artifacts" / "cwd.txt").read_text(encoding="utf-8"))
-    assert re.fullmatch(
-        r"source-[0-9a-f]{32}",
-        workspace.parent.name,
-    )
-
-
-def test_worker_snapshot_workspace_manifest_records_source_and_claim_identity(tmp_path):
-    source = _verified_directory_source(
-        tmp_path,
-        (
-            "import shutil\n"
-            "from pathlib import Path\n"
-            "import os\n"
-            "artifact_dir = Path(os.environ['RUNFORGE_ARTIFACT_DIR'])\n"
-            "manifest_path = Path.cwd().parent / 'runforge-worker.json'\n"
-            "shutil.copy(manifest_path, artifact_dir / 'manifest.json')\n"
-        ),
-    )
-    experiment = plan_experiment(
-        PlanRequest(
-            name="manifest-snapshot",
-            command=ExperimentCommand.argv((sys.executable, "train.py")),
-            source_path=source,
-            output_root=tmp_path / "reports",
-            directory_source_mode="directory-snapshot",
-        )
-    )
-
-    assert run_experiment(experiment) == 0
-
-    manifest = WorkerManifest.from_dict(
-        json.loads((experiment / "artifacts" / "manifest.json").read_text(encoding="utf-8"))
-    )
-    assert manifest.source_kind == "directory-snapshot"
-    assert manifest.source_identity == str(source.resolve())
-    assert len(manifest.source_reference) == SHA256_DIGEST_LENGTH
-    assert manifest.pid == os.getpid()
-    assert manifest.worker_id
-    assert manifest.owner
-
-
-def test_configured_workspace_root_reads_the_environment_variable(tmp_path, monkeypatch):
-    monkeypatch.setenv(sources_module.WORKSPACE_ROOT_VARIABLE, str(tmp_path))
-    assert sources_module._configured_workspace_root() == tmp_path.resolve()
-
-
-def test_configured_workspace_root_is_unset_by_default(monkeypatch):
-    monkeypatch.delenv(sources_module.WORKSPACE_ROOT_VARIABLE, raising=False)
-    assert sources_module._configured_workspace_root() is None
-
-
-@pytest.mark.parametrize("configured", ["", "   "])
-def test_configured_workspace_root_blank_value_is_unset(monkeypatch, configured):
-    monkeypatch.setenv(sources_module.WORKSPACE_ROOT_VARIABLE, configured)
-    assert sources_module._configured_workspace_root() is None
+    assert _listing(experiment) == ["train.py"]
+    assert not workspace.exists()
 
 
 def test_worker_directory_snapshot_execution_does_not_modify_captured_source(tmp_path):

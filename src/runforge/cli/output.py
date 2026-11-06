@@ -14,7 +14,6 @@ from pathlib import Path
 from runforge.execution.discovery import DiscoveryResult
 from runforge.execution.staleness import describe_staleness
 from runforge.execution.worker import WorkerProgressEvent, WorkerResult
-from runforge.execution.workspace_cleanup import DiscoveredWorkspace
 from runforge.infrastructure.duration import format_duration
 from runforge.infrastructure.git import GitOperationError, GitRepository
 from runforge.planning.matrix_mapping import MatrixMapping, load_matrix_mapping
@@ -142,42 +141,6 @@ def print_matrix_mapping_file(path: Path) -> None:
     mapping = load_matrix_mapping(path)
     print(f"Matrix identity: {mapping.matrix_id}")
     print_matrix_mapping(mapping)
-
-
-def print_workspaces_arguments(arguments: argparse.Namespace, root: Path) -> None:
-    """Print the effective scan root and confirmation targets for workspace cleanup."""
-    confirm = "not set (list only)" if arguments.confirm is None else ", ".join(path_text(p) for p in arguments.confirm)
-    print_effective_arguments("workspaces", [("root", path_text(root)), ("confirm", confirm)])
-
-
-def print_discovered_workspaces(discovered: Sequence[DiscoveredWorkspace]) -> None:
-    """List every discovered worker workspace and, when readable, its manifest summary."""
-    print(f"Worker workspaces found ({len(discovered)}):")
-    if not discovered:
-        print("  none")
-        return
-    for workspace in discovered:
-        if workspace.manifest is not None:
-            manifest = workspace.manifest
-            print(
-                f"  {workspace.path.name}\n"
-                f"    source: {manifest.source_kind} {manifest.source_identity} @ {manifest.source_reference}\n"
-                f"    host: {manifest.host}, pid: {manifest.pid}\n"
-                f"    owner: {manifest.owner}, started: {manifest.started_at}\n"
-                "    recorded identity only; process activity is not verified"
-            )
-        else:
-            print(
-                f"  {workspace.path.name}\n"
-                f"    manifest unavailable: {workspace.manifest_error}\n"
-                "    warning: a matching name alone does not establish that this is a RunForge workspace; "
-                "verify before removal"
-            )
-
-
-def print_removed_workspace(path: Path) -> None:
-    """Report one worker workspace removed after explicit confirmation."""
-    print(f"Removed: {path}", flush=True)
 
 
 def print_worker_summary(result: WorkerResult, *, label: str = "Worker") -> None:

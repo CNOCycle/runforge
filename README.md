@@ -35,6 +35,9 @@ once you have run your first experiment.
 
 ## Install
 
+RunForge needs Python 3.10 or later, and Git 2.36 or later on every machine
+that plans or executes Git-backed experiments.
+
 From this project root:
 
 ```bash
@@ -92,8 +95,8 @@ runforge run "$REPO/reports/main/01234567_baseline_0000"
 
 After the run, inspect `status.json`, `stdout.log`, and `stderr.log` in the
 experiment directory. The example directs the command's output to its
-`artifacts/` subdirectory. RunForge creates a temporary workspace automatically; see
-[where workers run](#choose-where-workers-run) to change its location.
+`artifacts/` subdirectory. RunForge runs the command in a temporary workdir
+inside the experiment; see [where commands run](#where-commands-run).
 
 Execution returns 0 for no selected failure, 1 for command failure, or 2 for
 CLI/discovery errors. The child's exact exit code remains in `status.json` and
@@ -157,8 +160,8 @@ paths.
 
 After a container restart or killed worker, start with the
 [pre-start inspection and recovery workflow](docs/guides/workers-and-recovery.md#before-starting-again-after-a-restart).
-It explains how to identify interrupted experiments from leftover workspaces,
-confirm that the old execution stopped, retry the same plan, and clean up.
+It explains how to identify interrupted experiments, confirm that the old
+execution stopped, and retry the same plan.
 
 Start another attempt of the same immutable configuration, archiving the
 previous one under `attempt-NNNN/`:
@@ -273,41 +276,22 @@ mix reports from unrelated projects. Pass `{ARTIFACT_DIR}` to your command, or
 read `RUNFORGE_ARTIFACT_DIR`, so outputs land inside the planned experiment
 artifact directory.
 
-## Choose where workers run
+## Where commands run
 
-By default, `current-head`, `pinned-git`, and `directory-snapshot` create a
-temporary workspace under `runforge-workspaces` beside the source directory.
-For example, the workspace for `/work/project` is created under
-`/work/runforge-workspaces`. The `verified-directory` mode runs directly in the
-original source directory and does not create a temporary workspace.
+`current-head`, `pinned-git`, and `directory-snapshot` run the command in a
+temporary workdir at `.workspace/` inside the experiment directory: a detached
+Git worktree at the recorded commit with its patch applied, or a copy of the
+captured snapshot. RunForge removes it when the command exits, whether it
+succeeded or failed. The `verified-directory` mode runs directly in the
+original source directory and creates no workdir.
 
-To put Git and snapshot workspaces in one location of your choice, create a
-writable parent and set `RUNFORGE_WORKSPACE_ROOT` in the shell that starts workers:
-
-```bash
-WORKSPACE_ROOT=/path/to/runforge-workspaces
-mkdir -p "$WORKSPACE_ROOT"
-export RUNFORGE_WORKSPACE_ROOT="$WORKSPACE_ROOT"
-```
-
-This setting applies to `run`, `retry`, and `launch`. It controls temporary working
-copies; `--out-dir` / `REPORT_ROOT` controls saved plans, logs, and artifacts.
-Set it on each worker machine or container before execution, rather than in a
-plan's `--env-file`, which supplies the child command's environment. Changing it
-affects future workspaces and does not move existing ones. `verified-directory`
-continues to execute in its original source directory.
-
-Inspect the chosen workspace parent with:
-
-```bash
-runforge workspaces "$WORKSPACE_ROOT"
-```
-
-With `RUNFORGE_WORKSPACE_ROOT` set, plain `runforge workspaces` uses that parent too.
-When unset, workspace listing scans the current directory; pass the source
-parent's `runforge-workspaces` directory explicitly to inspect default workspaces.
-See [workers and recovery](docs/guides/workers-and-recovery.md) for leftovers
-after interrupted execution.
+A worker killed mid-execution leaves `.workspace/` behind. It is never reused:
+the next execution of that experiment, normally a
+[retry](docs/guides/workers-and-recovery.md#interrupted-runs-and-explicit-retry),
+deletes it and builds a fresh one. Because the workdir lives on report storage,
+give the report root enough space for one source copy per running experiment.
+Keeping `reports/` in `.gitignore`, as above, also keeps workdirs out of the
+source repository's status.
 
 ## Pipelines And `{ARTIFACT_DIR}`
 

@@ -17,7 +17,6 @@ import pytest
 import runforge.execution.recovery as recovery_module
 import runforge.execution.staleness as staleness_module
 from runforge.cli import commands, main
-from runforge.execution.sources import _write_worker_manifest
 from runforge.infrastructure.claims import try_acquire_claim
 from runforge.infrastructure.json_store import load_json_object, save_json_object
 from runforge.infrastructure.storage import ExperimentDirectory
@@ -89,38 +88,20 @@ def test_startup_reports_interrupted_work_and_continues_other_experiments(tmp_pa
     assert not list(stopped.root.glob("attempt-*"))
 
 
-def test_startup_joins_workspaces_by_token_and_scans_shared_parent_once(tmp_path, monkeypatch, capsys):
+def test_startup_names_the_workdir_left_inside_an_interrupted_experiment(tmp_path, capsys):
     repository = create_git_repository(tmp_path / "repository", {"train.py": "print('done')\n"})
-    first = ExperimentDirectory(_plan(repository, tmp_path / "reports", "first"))
-    second = ExperimentDirectory(_plan(repository, tmp_path / "reports", "second"))
-    first_claim = _existing(first, owner="same-owner")
-    second_claim = _existing(second, owner="same-owner")
-    workspace_root = tmp_path / "runforge-workspaces"
-    workspace_root.mkdir()
-    names = ("repository-" + "1" * 32, "repository-" + "2" * 32)
-    for name, claim in zip(names, (first_claim, second_claim), strict=True):
-        workspace = workspace_root / name
-        workspace.mkdir()
-        _write_worker_manifest(
-            workspace, source_kind="git", source_identity=str(repository), source_reference="a" * 40, claim=claim
-        )
-    calls = []
-    discover = recovery_module.discover_workspaces
+    with_workdir = ExperimentDirectory(_plan(repository, tmp_path / "reports", "a-with-workdir"))
+    without_workdir = ExperimentDirectory(_plan(repository, tmp_path / "reports", "b-without-workdir"))
+    _existing(with_workdir)
+    _existing(without_workdir)
+    with_workdir.workspace.mkdir()
 
-    def inspect(root):
-        calls.append(root)
-        return discover(root)
-
-    monkeypatch.setattr(recovery_module, "discover_workspaces", inspect)
     assert main(["run", str(tmp_path / "reports")]) == 0
 
-    output = capsys.readouterr().err
-    first_report, second_report = output.split("Existing execution:")[1:]
-    assert "matching workspace: " + str(workspace_root / names[0]) in first_report
-    assert names[1] not in first_report
-    assert "matching workspace: " + str(workspace_root / names[1]) in second_report
-    assert names[0] not in second_report
-    assert calls == [workspace_root]
+    first_report, second_report = capsys.readouterr().err.split("Existing execution:")[1:]
+    assert f"workdir present: {with_workdir.workspace}" in first_report
+    assert "workdir present" not in second_report
+    assert with_workdir.workspace.is_dir()  # Recovery only reports; it never deletes.
 
 
 @pytest.mark.parametrize("claim_metadata", [None, "{broken JSON"])
@@ -139,22 +120,6 @@ def test_startup_reports_unknown_owner_without_claim_and_keeps_record(tmp_path, 
     assert "owner/activity unknown" in capsys.readouterr().err
     assert layout.status_file.read_bytes() == before
     assert layout.claim.exists()
-
-
-def test_unreadable_workspace_parent_does_not_block_other_work(tmp_path, monkeypatch, capsys):
-    repository = create_git_repository(tmp_path / "repository", {"train.py": "print('done')\n"})
-    stopped = ExperimentDirectory(_plan(repository, tmp_path / "reports", "a-stopped"))
-    following = ExperimentDirectory(_plan(repository, tmp_path / "reports", "b-following"))
-    _existing(stopped)
-
-    def denied(_root):
-        raise PermissionError("inspection denied")
-
-    monkeypatch.setattr(recovery_module, "discover_workspaces", denied)
-    assert main(["run", str(tmp_path / "reports")]) == 0
-
-    assert "workspace inspection incomplete: inspection denied" in capsys.readouterr().err
-    assert following.load_status().state == "completed"
 
 
 def test_startup_recovery_command_quotes_experiment_paths(tmp_path, capsys):
@@ -321,8 +286,8 @@ def test_recovery_block_is_printed_without_an_appended_path(tmp_path, capsys):
     assert main(["run", str(layout.root)]) == 0
 
     block = capsys.readouterr().err.split("Existing execution:")[1]
-    assert "workspace.\n" in block or block.rstrip().endswith("workspace.")
-    assert f"workspace.: {layout.root}" not in block
+    assert "workdir.\n" in block or block.rstrip().endswith("workdir.")
+    assert f"workdir.: {layout.root}" not in block
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Uses POSIX process groups and a readiness FIFO")
@@ -344,9 +309,6 @@ def test_killed_worker_is_identified_and_force_retry_starts_new_attempt(tmp_path
             )
         },
     )
-    workspace_root = tmp_path / "workspaces"
-    workspace_root.mkdir()
-    monkeypatch.setenv("RUNFORGE_WORKSPACE_ROOT", str(workspace_root))
     monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[2] / "src"))
     layout = ExperimentDirectory(_plan(repository, tmp_path / "reports", "interrupted"))
     ready = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
@@ -366,11 +328,12 @@ def test_killed_worker_is_identified_and_force_retry_starts_new_attempt(tmp_path
     assert layout.load_status().state == "inprogress"
     old_status = layout.status_file.read_bytes()
     old_claim = layout.claim_file.read_bytes()
-    workspace = next(workspace_root.glob("repository-*"))
+    workspace = layout.workspace
+    assert workspace.is_dir()
 
     assert main(["run", str(layout.root)]) == 0
     report = capsys.readouterr().err
-    assert f"matching workspace: {workspace}" in report
+    assert f"workdir present: {workspace}" in report
     assert "process appears dead" in report
     assert "assessment: stale" in report
     assert layout.status_file.read_bytes() == old_status
@@ -383,7 +346,8 @@ def test_killed_worker_is_identified_and_force_retry_starts_new_attempt(tmp_path
     snapshot = load_json_object(layout.root / "attempt-0001" / "status.snapshot.json")
     assert snapshot["state"] == "inprogress"
     assert not layout.claim.exists()
-    assert workspace.exists()  # Recovery does not delete the prior workspace.
+    # The retry deleted the killed run's workdir, built a fresh one, and removed it.
+    assert not workspace.exists()
     assert "recovered" in layout.stdout_log.read_text()
 
 
