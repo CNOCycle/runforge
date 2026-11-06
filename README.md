@@ -285,10 +285,11 @@ captured snapshot. RunForge removes it when the command exits, whether it
 succeeded or failed. The `verified-directory` mode runs directly in the
 original source directory and creates no workdir.
 
-A worker killed mid-execution leaves `.workspace/` behind. It is never reused:
-the next execution of that experiment, normally a
+A worker killed during Git or snapshot execution can leave `.workspace/` behind.
+It is never reused: the next execution of that experiment, normally a
 [retry](docs/guides/workers-and-recovery.md#interrupted-runs-and-explicit-retry),
-deletes it and builds a fresh one. Because the workdir lives on report storage,
+deletes it and builds a fresh one. A locked Git worktree is retained until an
+operator inspects and unlocks it. Because the workdir lives on report storage,
 give the report root enough space for one source copy per running experiment.
 Keeping `reports/` in `.gitignore`, as above, also keeps workdirs out of the
 source repository's status.
