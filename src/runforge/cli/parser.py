@@ -43,7 +43,7 @@ def _duration_argument(value: str) -> timedelta:
 
 
 def _utc_timestamp_argument(value: str) -> datetime:
-    """Parse a --updated-before CLI value into an aware UTC datetime."""
+    """Parse a --started-before CLI value into an aware UTC datetime."""
     try:
         return parse_utc(value)
     except ValueError as error:
@@ -157,7 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     hints.add_argument(
         "--started-before",
-        dest="updated_before",
+        dest="started_before",
         type=_utc_timestamp_argument,
         metavar="TIMESTAMP",
         help="read-only start-time cutoff (default: not set)",

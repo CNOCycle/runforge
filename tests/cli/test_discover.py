@@ -152,7 +152,7 @@ def test_discover_cli_rejects_a_missing_root(tmp_path, capsys):
     assert "error: Discovery root" in captured.err
 
 
-def test_discover_cli_rejects_both_older_than_and_updated_before(capsys):
+def test_discover_cli_rejects_both_older_than_and_started_before(capsys):
     with pytest.raises(SystemExit) as raised:
         main(["discover", "--older-than", "6h", "--started-before", "2026-08-01T00:00:00Z"])
 
@@ -208,7 +208,7 @@ def test_discover_cli_with_older_than_flags_a_stale_inprogress_experiment(tmp_pa
     assert "  stale: 1" in lines
 
 
-def test_discover_cli_with_updated_before_uses_an_explicit_cutoff(tmp_path, capsys):
+def test_discover_cli_with_started_before_uses_an_explicit_cutoff(tmp_path, capsys):
     root = tmp_path / "reports"
     stale = root / "stale"
     _experiment(stale, name="stale-run", state="inprogress", started_at="2020-01-01T00:00:00.000000Z")
