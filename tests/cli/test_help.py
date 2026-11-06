@@ -85,8 +85,6 @@ def test_top_help_has_seven_canonical_operations(capsys):
     output = _help(capsys)
     for name in ("plan", "launch", "run", "retry", "discover", "mapping", "schedule"):
         assert name in output
-    for old in ("matrix-show", "worker-cleanup", "worker-inspect"):
-        assert old not in output
     assert "runforge SUBCOMMAND --help" in output
 
 

@@ -128,7 +128,7 @@ def print_planning_arguments(
     if hasattr(arguments, "stream_output"):
         rows.append(("stream output", boolean_text(arguments.stream_output)))
     rows.extend(extra)
-    print_effective_arguments(getattr(arguments, "command_name", arguments.subcommand), rows)
+    print_effective_arguments(arguments.command_name, rows)
 
 
 def print_mapping_arguments(arguments: argparse.Namespace) -> None:

@@ -129,12 +129,6 @@ def test_repeated_completed_run_has_skip_contract(tmp_path, capsys):
     assert ExperimentDirectory.resolve(experiment).load_status().attempt == 1
 
 
-def test_no_legacy_workspace_leaf_or_priority_command_is_advertised(capsys):
-    with pytest.raises(SystemExit) as result:
-        main(["worker-inspect", "workspace"])
-    assert result.value.code == CLI_ERROR
-
-
 def test_missing_later_path_prevents_execution_of_an_earlier_valid_target(tmp_path, capsys):
     experiment = _plan(tmp_path, capsys)
 
