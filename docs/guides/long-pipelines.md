@@ -13,6 +13,14 @@ The recommended pattern is:
 3. execute the wrapper as an argument-array command; and
 4. write all generated output below `RUNFORGE_ARTIFACT_DIR`.
 
+Where the wrapper lives decides how you launch it:
+
+- **Part of the project:** commit it (or at least `git add` it) and run it from
+  the source. This is the recommended default.
+- **Local only:** keep it in a separate folder and capture that folder with
+  `--input-tree`. See
+  [Run a Local Wrapper Without Committing It](#run-a-local-wrapper-without-committing-it).
+
 ## Recommended Tracked Wrapper
 
 Create `experiments/run_pipeline.sh` in the source repository:
@@ -88,6 +96,50 @@ put credentials or other secrets in this file. Dataset paths identify locations
 but do not capture dataset contents; reproducible data versioning or checksums
 remain the project's responsibility.
 
+## Run a Local Wrapper Without Committing It
+
+If the wrapper is a local file that should not go into Git, put it in its own
+folder and capture that folder with `--input-tree`:
+
+```text
+pipeline-inputs/
+  run_pipeline.sh
+```
+
+Use the same wrapper as above. Then launch the captured copy, which RunForge
+exposes as `{INPUT_DIR}`:
+
+```bash
+runforge launch \
+  --name demo-pipeline \
+  --source-path "$REPO" \
+  --input-tree /path/to/pipeline-inputs \
+  --env-file "$ENV_FILE" \
+  --stream-output \
+  -- bash '{INPUT_DIR}/run_pipeline.sh'
+```
+
+The wrapper does not need to be staged or committed. Keep in mind:
+
+- The command still runs in the source directory, so `scripts/train_model.py`
+  and `scripts/evaluate_model.py` must exist in the selected source.
+- Every file in the folder is captured when the experiment is planned, not
+  only the wrapper. Files must be UTF-8 regular files, and symbolic links are
+  rejected. Keep unrelated files out of the folder.
+- JSON, YAML, and INI files are rendered as templates, so placeholders such as
+  `{ARTIFACT_DIR}` are replaced and an invalid file or unknown placeholder can
+  make planning fail.
+- Other files, including `.sh`, are not rendered: placeholders such as
+  `{INPUT_DIR}` are not substituted inside the wrapper. They are read as UTF-8
+  text, so line endings may be normalized (a CRLF script is not guaranteed to
+  be captured byte-for-byte). Use LF line endings.
+- Do not put secrets in the folder. It is recorded with the experiment.
+- If the folder is inside the Git repository, RunForge may warn that the
+  untracked wrapper is not in the Git patch. The input capture includes it.
+
+To fill `{ARTIFACT_DIR}` placeholders in configuration files, see
+[Planned configuration inputs](planned-configuration-inputs.md).
+
 ## Artifact Directory Forms
 
 Inside a wrapper, use the environment variable provided to the child process:
@@ -114,61 +166,16 @@ In current-HEAD mode, RunForge captures:
 - staged and unstaged changes to tracked files; and
 - the names, but not contents, of untracked non-ignored files.
 
-Consequently, a command that depends on an untracked wrapper will fail in the
-detached worker worktree. The wrapper must be committed or staged before
-planning. In pinned mode, it must exist in the selected commit or be included in
-the explicit captured patch.
+Consequently, a command that accesses an untracked wrapper in the source
+worktree will fail. For that command, the wrapper must be committed or staged
+before planning. In pinned mode, it must exist in the selected commit or be
+included in the explicit captured patch. The input-tree invocation in
+[Run a Local Wrapper Without Committing It](#run-a-local-wrapper-without-committing-it)
+instead accesses its separately captured copy and needs neither staging nor a
+commit for the wrapper.
 
 Committing stable wrappers is the preferred workflow. It keeps the Git index
 untouched during planning and makes the pipeline available to other machines.
-
-## Temporary Untracked Wrapper
-
-For a deliberately local wrapper, a Make target can stage it immediately before
-planning and restore it to the untracked state afterward. This is an advanced
-workaround because it temporarily mutates the Git index.
-
-```makefile
-SHELL := /bin/bash
-ENV_FILE ?= training.env
-
-.PHONY: launch
-launch:
-	@set -euo pipefail; \
-	script=run_pipeline.sh; \
-	if ! git diff --cached --quiet -- "$$script"; then \
-		echo "$$script already has staged changes; refusing to alter them"; \
-		exit 2; \
-	fi; \
-	trap 'git reset --quiet -- "$$script"' EXIT; \
-	git add -- "$$script"; \
-	runforge launch \
-		--name exp \
-		--source-path . \
-		--env-file "$(ENV_FILE)" \
-		--stream-output \
-		-- bash "./$$script"
-```
-
-Run it with:
-
-```bash
-make launch
-```
-
-The staged file is included in RunForge's captured patch. The `EXIT` trap
-unstages it whether planning or execution succeeds, fails, or is interrupted.
-The guard refuses to overwrite an existing staged version of the same file.
-The target assumes that `make launch` is invoked from the source repository
-root. Override `ENV_FILE` when the input file is elsewhere:
-
-```bash
-make launch ENV_FILE=/path/to/training.env
-```
-
-Do not run this target concurrently with another command that modifies the Git
-index. The target does not isolate unrelated tracked changes; current-HEAD
-planning intentionally captures the repository's complete tracked diff.
 
 ## Configuration Profiles
 
