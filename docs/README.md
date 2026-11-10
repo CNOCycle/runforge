@@ -44,4 +44,5 @@ Deployment concerns for running RunForge on shared infrastructure.
 | --- | --- |
 | [Shared filesystems](operations/shared-filesystems.md) | What multi-worker execution requires of your storage. |
 | [Slurm and containers](operations/slurm-and-containers.md) | Recording an identity an operator can actually check. |
+| [Interruptible machines](operations/interruptible-machines.md) | Running ablation plans on a machine that can be stopped at any time: the on-start script, recovery, and getting results home. |
 | [Troubleshooting](operations/troubleshooting.md) | Symptoms, causes, and the supported recovery for each. |
