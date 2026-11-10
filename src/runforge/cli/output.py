@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from runforge.execution.discovery import DiscoveryResult
+from runforge.execution.onstart import Interrupted
 from runforge.execution.staleness import describe_staleness
 from runforge.execution.worker import WorkerProgressEvent, WorkerResult
 from runforge.infrastructure.duration import format_duration
@@ -141,6 +142,41 @@ def print_matrix_mapping_file(path: Path) -> None:
     mapping = load_matrix_mapping(path)
     print(f"Matrix identity: {mapping.matrix_id}")
     print_matrix_mapping(mapping)
+
+
+def print_onstart_warning() -> None:
+    """Warn that onstart forces retries, which is only safe on one machine."""
+    print(
+        "warning: runforge onstart force-retries every experiment under PATH that is still inprogress.",
+        file=sys.stderr,
+    )
+    print(
+        "warning: Use it only on a single machine that has just started, while no other machine works on this "
+        "report root. A forced retry of an experiment that is still running starts it a second time, and RunForge "
+        "cannot detect that.",
+        file=sys.stderr,
+    )
+    print(
+        "warning: Your program must be resumable. RunForge restarts the recorded command and restores the previous "
+        "artifacts to RUNFORGE_ARTIFACT_DIR, but does not resume the process.",
+        file=sys.stderr,
+    )
+
+
+def print_onstart_plan(root: Path, found: Interrupted) -> None:
+    """List what onstart is about to restart and what it leaves for inspection."""
+    print(f"Interrupted experiments to restart under {root}: {len(found.restart)}")
+    for path in found.restart:
+        print(f"  {path}")
+    print_onstart_left_unchanged(found)
+
+
+def print_onstart_left_unchanged(found: Interrupted) -> None:
+    """List experiments onstart does not touch, so they stay visible after the run."""
+    for path in found.held:
+        print(f"  held, left inprogress (remove its schedule.json, then run onstart again): {path}")
+    for path in found.unstarted_claimed:
+        print(f"  claimed but never started; needs inspection, left unchanged: {path}")
 
 
 def print_worker_summary(result: WorkerResult, *, label: str = "Worker") -> None:

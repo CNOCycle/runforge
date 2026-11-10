@@ -15,15 +15,22 @@ from runforge.cli.output import (
     print_mapping_arguments,
     print_matrix_mapping,
     print_matrix_mapping_file,
+    print_onstart_left_unchanged,
+    print_onstart_plan,
+    print_onstart_warning,
     print_planning_arguments,
     print_worker_progress,
     print_worker_summary,
 )
 from runforge.cli.requests import matrix_request, planning_request
 from runforge.execution.discovery import DiscoveryError, discover_paths
+from runforge.execution.errors import WorkerError
+from runforge.execution.onstart import ReportRootLock, find_interrupted
 from runforge.execution.path_patterns import expand_path_arguments
+from runforge.execution.retry import RetryError
 from runforge.execution.scheduling import SchedulingError, set_hold
 from runforge.execution.worker import BatchRequest, execute_paths
+from runforge.infrastructure.claims import ClaimError
 from runforge.planning.matrix_mapping import build_matrix_mapping, save_matrix_mapping
 from runforge.planning.planner import MatrixPlanRequest, PlanRequest, plan_experiment, plan_matrix
 
@@ -51,6 +58,52 @@ def run(arguments: argparse.Namespace) -> int:
         progress=print_worker_progress,
     )
     print_worker_summary(result, label="Execution")
+    return result.exit_code
+
+
+def onstart(arguments: argparse.Namespace) -> int:
+    """Restart interrupted experiments, then run the rest, on a single machine that just started."""
+    root = arguments.path.expanduser()
+    if not root.is_dir():
+        raise DiscoveryError(f"Report root is not a directory: {root}")
+    print_onstart_warning()
+    if not arguments.single_node:
+        print("error: refusing to continue without --single-node; nothing was changed", file=sys.stderr)
+        return 2
+    root = root.resolve()
+    print_effective_arguments(
+        "onstart",
+        [
+            ("report root", path_text(root)),
+            ("single node", "confirmed"),
+            ("stream output", "enabled" if arguments.stream_output else "disabled"),
+        ],
+    )
+    with ReportRootLock(root):
+        found = find_interrupted(root)
+        print_onstart_plan(root, found)
+        exit_code = 0
+        for experiment in found.restart:
+            exit_code = max(exit_code, _restart_interrupted(experiment, arguments.stream_output))
+        result = execute_paths(BatchRequest((root,), None, arguments.stream_output), progress=print_worker_progress)
+        print_worker_summary(result, label="Execution")
+        if found.held or found.unstarted_claimed:
+            print("Left unchanged:")
+            print_onstart_left_unchanged(found)
+        return max(exit_code, result.exit_code)
+
+
+def _restart_interrupted(experiment: Path, stream_output: bool) -> int:
+    """Force-retry one experiment with its artifacts restored; a failure is reported, never repeated."""
+    try:
+        result = execute_paths(
+            BatchRequest((experiment,), None, stream_output, retry=True, force=True, reuse_artifacts=True),
+            progress=print_worker_progress,
+        )
+    except (ClaimError, RetryError, WorkerError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    print_worker_summary(result, label="Recovery")
     return result.exit_code
 
 
