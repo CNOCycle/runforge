@@ -71,13 +71,14 @@ computer waits for the machine, so the machine comes first.
 
 ## The Files
 
-Two files in [contrib/interruptible](../../contrib/interruptible/) do this.
-They are examples to copy and adapt, and are not installed with RunForge.
+Two example scripts in [examples/interruptible](examples/interruptible/) do
+this. Copy them and adapt them; they belong to this guide and are not part of
+the RunForge package.
 
 | File | Runs on | Role |
 | --- | --- | --- |
-| [`onstart.sh`](../../contrib/interruptible/onstart.sh) | the rental machine, at every start; your computer with `--transfer-only` | ready-flag guard, then `runforge onstart`; or only the transfer |
-| [`transfer.sh`](../../contrib/interruptible/transfer.sh) | your computer (pull) or the machine (push) | copies the report root |
+| [`onstart.sh`](examples/interruptible/onstart.sh) | the rental machine, at every start; your computer with `--transfer-only` | ready-flag guard, then `runforge onstart`; or only the transfer |
+| [`transfer.sh`](examples/interruptible/transfer.sh) | your computer (pull) or the machine (push) | copies the report root |
 
 ## Choosing How Results Come Home
 
@@ -129,7 +130,7 @@ runforge plan --name ablation --matrix matrix.json --source-mode directory-snaps
 #   nothing until it exists, so a start in the middle of publication starts nothing.
 touch "$WORKSPACE/.ready_to_run"
 
-# Step 5: set up onstart.sh (copy it from contrib/interruptible first).
+# Step 5: set up onstart.sh (copy it from docs/operations/examples/interruptible first).
 cp onstart.sh "$WORKSPACE/onstart.sh" && chmod +x "$WORKSPACE/onstart.sh"
 cat > "$WORKSPACE/onstart.env" <<ENV
 WORKSPACE=$WORKSPACE
@@ -170,7 +171,7 @@ remains is configuration. You need `ssh` and `rsync` installed.
 1. Make a working directory and copy the files into it:
 
    ```bash
-   mkdir -p ~/rental && cp contrib/interruptible/onstart.sh contrib/interruptible/transfer.sh ~/rental/
+   mkdir -p ~/rental && cp docs/operations/examples/interruptible/onstart.sh docs/operations/examples/interruptible/transfer.sh ~/rental/
    chmod +x ~/rental/onstart.sh ~/rental/transfer.sh
    ```
 
@@ -264,7 +265,7 @@ you revoke it by removing one line at home.
 
    ```bash
    mkdir -p ~/rental && cd ~/rental
-   cp /path/to/contrib/interruptible/transfer.sh . && chmod +x transfer.sh
+   cp /path/to/runforge/docs/operations/examples/interruptible/transfer.sh . && chmod +x transfer.sh
    ssh-keygen -t ed25519 -N "" -C rental-push -f ./rental_push_key
    ssh-keygen -t ed25519 -N "" -f ./ssh_host_key
    ```
@@ -451,7 +452,7 @@ in the script, and are not settings.
 
 ## [Optional] Stop The Machine When Everything Is Done
 
-This is a **proposal** and not implemented: nothing in `contrib/interruptible`
+This is a **proposal** and not implemented: nothing in `examples/interruptible`
 stops a machine. A rental node bills until it is stopped or destroyed, and how to
 do either depends on the provider.
 
