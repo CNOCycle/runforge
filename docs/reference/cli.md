@@ -13,6 +13,7 @@ Priority controls are deferred.
 | launch | Publish and execute exactly one new plan. | Aggregate 0/1/2 |
 | run PATH... | Execute eligible experiment leaves beneath explicit paths or patterns. | Aggregate 0/1/2 |
 | retry PATH... | Archive and retry failed selected plans. | Aggregate 0/1/2 |
+| onstart --single-node PATH | Entry point for an interruptible machine: restart interrupted experiments, then run the rest. | Aggregate 0/1/2 |
 | discover [PATH...] | Union/deduplicate read-only experiment discovery. | 0, or 2 on invalid metadata |
 | mapping ARTIFACT | Read a saved matrix mapping. | 0, or 2 on error |
 | schedule (--hold \| --release) PATH... | Change scheduling holds, not claims or history. | 0, or 2 on rejected targets |
@@ -36,6 +37,7 @@ runforge schedule --hold "$EXPERIMENT1" "$EXPERIMENT2"
 runforge schedule --hold "$REPORT_ROOT/**/*baseline*"
 runforge retry "$EXPERIMENT"
 runforge retry "$REPORT_ROOT/**/*baseline*"
+runforge onstart --single-node "$REPORT_ROOT"
 runforge --version
 ```
 
@@ -130,6 +132,70 @@ Root selection reuses each eligible failed experiment's own artifacts. Combining
 it with --force still requires experiment directories (explicit or from a pattern)
 and confirmation that prior workers and children stopped. See the [checkpoint recovery guide](../guides/workers-and-recovery.md#reuse-artifacts-for-application-checkpoint-recovery)
 for costs, limitations, and interrupted preparation.
+
+## onstart
+
+```bash
+runforge onstart --single-node "$REPORT_ROOT"
+```
+
+The entry point for an interruptible machine: one that can be stopped at any
+time and started again later. Run it once each time the machine starts, after
+the plans are published, for example
+`[ -f "$READY_FLAG" ] && runforge onstart --single-node "$REPORT_ROOT"`. It is
+not a daemon; it returns when the work is done.
+
+It does two things, in order:
+
+1. Restarts every experiment under the report root that an interruption left
+   `inprogress`, as `retry --force --reuse-artifacts` would.
+2. Processes the remaining plans exactly as `run` does.
+
+**Warning: your program must be resumable.** RunForge restarts the recorded
+command as a new attempt and copies the previous attempt's artifacts back to
+`RUNFORGE_ARTIFACT_DIR`. It does not resume the process: a program that does not
+load its own checkpoint from that directory starts over.
+
+**Warning: one machine only.** The restarts are forced. A forced retry of an
+experiment that is still running starts it a second time, and RunForge cannot
+detect that. Use `onstart` only on a single machine that has just started, while
+no other machine works on the report root. Every invocation prints this warning,
+and without `--single-node` the command stops with exit 2 having changed nothing.
+On a cluster or a shared report root, use `run` and a manual `retry`
+([Workers and recovery](../guides/workers-and-recovery.md)).
+
+An interruption kills the worker and the program but leaves the experiment
+`inprogress` with its claim: the status is stale. `onstart` clears the claim,
+archives the interrupted attempt under `attempt-NNNN`, and starts a new attempt
+that continues from the restored artifacts. The step-by-step description is in
+[Workers and recovery](../guides/workers-and-recovery.md#what-happens-to-an-interrupted-task).
+
+Behavior to know:
+
+- Use exactly one `onstart` entry point per machine, on the report root. While
+  it runs, `.onstart.lock` in the report root is locked, so a second `onstart`
+  on the same path and host exits 2. The lock does not cover other hosts,
+  overlapping paths (a report root and one of its subdirectories), or a
+  training process that outlived a killed RunForge process.
+- An experiment that cannot be restarted, for example because its artifact
+  tree contains a symbolic link, is reported and the command exits 2. `onstart`
+  makes no second attempt and does not retry it without its artifacts. It does
+  not promise that nothing changed: the status stays `inprogress` and is not
+  rewritten, but the forced retry has already cleared the old claim, and a
+  failed rollback can leave files that the message asks you to inspect. Read
+  the message before touching the experiment.
+- Holds take precedence. An `inprogress` experiment that is held is not
+  restarted and not released; it is listed before the restarts and again at the
+  end. RunForge cannot change scheduling for an `inprogress` experiment, so
+  remove its `schedule.json` (an absent file means not held) and run `onstart`
+  again to restart it. Held plans are skips, so they do not change the exit
+  code, as with `run`. This state only arises through manual editing of
+  `schedule.json`.
+- Experiments in `created` or `init` that still hold a claim are left unchanged
+  and listed in the same way, because a forced retry does not clear them. Failed
+  experiments are not retried.
+- The exit code is 0 when every step exited 0, otherwise the largest exit code
+  among the restarts and the final run.
 
 ## Environment and output
 

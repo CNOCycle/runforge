@@ -62,7 +62,7 @@ class SemanticRawDescriptionHelpFormatter(SemanticDefaultsHelpFormatter, argpars
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the seven explicit, flat operation selectors."""
+    """Build the eight explicit, flat operation selectors."""
     parser = argparse.ArgumentParser(
         prog="runforge",
         description="Plan, inspect, and run reproducible Git-backed and non-Git experiments.",
@@ -134,6 +134,29 @@ def build_parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help="retry explicit experiment paths after confirming the old process stopped (default: disabled)",
             )
+    leaf = leaves.add_parser(
+        "onstart",
+        help="entry point for an interruptible machine: restart interrupted experiments, then run the rest",
+        description=(
+            "Entry point for an interruptible machine; run it each time the machine starts. Restarts every "
+            "experiment under PATH that an interruption left inprogress, then processes the remaining plans like "
+            "'runforge run PATH'. WARNING: your program must be resumable. RunForge restarts the recorded command "
+            "and restores the previous artifacts to RUNFORGE_ARTIFACT_DIR but does not resume the process. "
+            "WARNING: the restarts are forced, which is only safe on one machine that has just started while no "
+            "other machine works on this report root; a forced retry of an experiment that is still running starts "
+            "it a second time. Pass --single-node to confirm."
+        ),
+        epilog=_WORKDIR_HELP,
+        formatter_class=SemanticDefaultsHelpFormatter,
+    )
+    leaf.add_argument("path", type=Path, metavar="PATH", help="report root holding the published plans")
+    leaf.add_argument(
+        "--single-node",
+        action="store_true",
+        help="confirm that this machine has just started and no other machine works on PATH (default: disabled)",
+    )
+    _add_stream_output_argument(leaf)
+    leaf.set_defaults(handler=commands.onstart, command_name="onstart")
     leaf = leaves.add_parser(
         "discover", help="inspect experiment paths without execution", formatter_class=SemanticDefaultsHelpFormatter
     )

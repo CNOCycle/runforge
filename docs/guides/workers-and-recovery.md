@@ -109,6 +109,69 @@ runforge discover "$REPORT_ROOT"
 runforge run "$REPORT_ROOT"
 ```
 
+## Interruptible machines
+
+An interruptible machine, such as a discounted rental node, can be stopped at
+any time and started again later. `runforge onstart` is the entry point to run
+each time such a machine starts, once the plans are published. It restarts the
+experiments the interruption cut off, then processes the remaining plans:
+
+```bash
+runforge onstart --single-node "$REPORT_ROOT"
+```
+
+> **Warning: your program must be resumable.** RunForge restarts the recorded
+> command as a new attempt and copies the previous attempt's artifacts back to
+> `RUNFORGE_ARTIFACT_DIR`. It does not resume the process. A program that does
+> not load its own checkpoint from that directory starts over, and everything
+> since its last checkpoint is lost.
+
+> **Warning: one machine only.** The restarts are forced, which is only safe
+> when nothing else is running the interrupted experiments. Use a single
+> `onstart` entry point per machine. On a cluster or any
+> report root shared with other machines, use the checks in
+> [Before starting again after a restart](#before-starting-again-after-a-restart)
+> instead.
+
+### What happens to an interrupted task
+
+An experiment records its progress in its own files, so an interruption leaves
+a trace that `onstart` can read.
+
+1. **While it runs**, the experiment is `inprogress` and its `claim/` directory
+   names the worker that owns it.
+2. **When the machine is cut off**, the worker and your program are killed
+   without a chance to update anything. After the restart the experiment still
+   says `inprogress` and still has its claim, but no process is behind either.
+   The status is stale. RunForge cannot tell from the files alone that the
+   worker is gone, and `run` skips claimed work, so the experiment would stay
+   stuck while the rest of the queue continues.
+3. **`runforge onstart` resets it.** Because you confirmed with `--single-node`
+   that the machine has just started, it treats every `inprogress` experiment
+   as stale, unless the experiment is held: a scheduling hold takes precedence,
+   so it is listed and left alone until its hold is removed. For each one it clears
+   the claim, archives the interrupted attempt
+   (status, logs, and artifacts) under `attempt-NNNN`, and starts a new attempt
+   with the same recorded command and configuration. The archived artifacts are
+   copied back to `RUNFORGE_ARTIFACT_DIR`.
+4. **Your program continues the task.** It finds its checkpoint in
+   `RUNFORGE_ARTIFACT_DIR` and picks up from there. RunForge started the
+   command again; carrying on from the checkpoint is the program's job.
+
+Discovery shows the difference:
+
+```text
+inprogress | attempt=1 | name=ablation | ... | path=/workspace/reports/main/01234567_ablation_0000
+completed  | attempt=2 | name=ablation | ... | path=/workspace/reports/main/01234567_ablation_0000
+```
+
+The first line is what `runforge discover` reports after the restart and
+before `onstart`; the second is the same experiment after it. The interrupted
+attempt stays available as `attempt-0001` inside the experiment directory.
+
+The lock, exit codes, and what the command leaves alone are in the
+[CLI reference](../reference/cli.md#onstart).
+
 ## Inspect published work
 
 ```bash
