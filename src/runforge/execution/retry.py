@@ -8,7 +8,8 @@ import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from runforge.execution.errors import ExperimentNotRunnableError
+from runforge.execution.errors import ExperimentHeldError, ExperimentNotRunnableError
+from runforge.execution.scheduling import is_held
 from runforge.infrastructure.claims import (
     ClaimError,
     ExperimentClaim,
@@ -267,6 +268,9 @@ def acquire_retry_claim(experiment: ExperimentDirectory, *, force: bool = False)
     """Validate before an explicit force override, then acquire preparation ownership."""
     _configuration, status = experiment.load_metadata()
     _validate_retry_state(status, force=force)
+    if force and is_held(experiment):
+        # A hold written after discovery must not cost the previous owner's claim evidence.
+        raise ExperimentHeldError(f"Experiment is held: {experiment.root}")
     overridden = _clear_existing_claim(experiment) if force else False
     return try_acquire_claim(experiment), overridden
 

@@ -338,16 +338,9 @@ def _process_worker_candidate(
     progress: Callable[[WorkerProgressEvent], None] | None,
 ) -> Literal["completed", "failed", "claim_contended", "stale", "held", "invalid"]:
     """Acquire ownership before retry preparation and execution-boundary rereads."""
-    try:
-        if request.retry:
-            claim, overridden = acquire_retry_claim(experiment, force=request.force)
-        else:
-            claim, overridden = try_acquire_claim(experiment), False
-    except (ClaimError, RetryError, ValueError) as error:
-        return _claim_failure_outcome(experiment, request, progress, error)
+    claim, overridden, outcome = _acquire_candidate_claim(experiment, request, progress)
     if claim is None:
-        _report_retry_contention(experiment, request, progress)
-        return "claim_contended"
+        return outcome
     execution_progress = _ExecutionProgress(progress)
     try:
         if request.retry:
@@ -371,6 +364,32 @@ def _process_worker_candidate(
         if claim is not None:
             _release_execution_claim(experiment, claim, stream_output=request.stream_output, progress=progress)
     return "completed" if exit_code == 0 else "failed"
+
+
+def _acquire_candidate_claim(experiment, request, progress):
+    """Return the claim and whether it overrode one, or no claim and the outcome that ends the candidate."""
+    try:
+        if request.retry:
+            claim, overridden = acquire_retry_claim(experiment, force=request.force)
+        else:
+            claim, overridden = try_acquire_claim(experiment), False
+    except ExperimentHeldError:
+        return None, False, "held"
+    except (ClaimError, RetryError, SchedulingError, ValueError) as error:
+        return None, False, _claim_failure_outcome(experiment, request, progress, error)
+    if claim is None:
+        if overridden:
+            _notify_progress(
+                progress,
+                replace(
+                    _progress_event("warning", experiment, request.stream_output),
+                    error="Forced retry cleared the previous claim, but another worker acquired the experiment first",
+                ),
+            )
+        else:
+            _report_retry_contention(experiment, request, progress)
+        return None, overridden, "claim_contended"
+    return claim, overridden, None
 
 
 def _execution_error_outcome(experiment, request, progress, error, reported_failure):
