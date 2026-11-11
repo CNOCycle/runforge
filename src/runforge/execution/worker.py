@@ -492,9 +492,13 @@ def _run_claimed_experiment(
             status,
             _ExecutionOptions(stream_output, progress, claim),
         )
-    except (WorkerError, OSError) as error:
+    except Exception as error:  # noqa: BLE001 - any failure after the claim must leave a recorded outcome
         failure = error if isinstance(error, WorkerError) else WorkerError(str(error))
-        _save_claimed_status(experiment, claim, _failed_status(experiment, status, str(failure)))
+        try:
+            _save_claimed_status(experiment, claim, _failed_status(experiment, status, str(failure)))
+        except ClaimError:
+            # Ownership was lost, so the status now belongs to the new owner and is left untouched.
+            pass
         _notify_progress(
             progress,
             replace(
