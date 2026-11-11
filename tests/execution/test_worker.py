@@ -22,6 +22,7 @@ from tests.support import create_git_repository, git
 
 
 FAILURE_EXIT_CODE = 7
+RETRIES_AFTER_PRESTART_FAILURE = 2
 
 
 def _repository(tmp_path: Path, script: str) -> Path:
@@ -869,4 +870,21 @@ def test_lost_claim_ownership_leaves_the_new_owners_status_untouched(tmp_path, m
 
     assert result.failed == 1
     assert experiment.load_status().state == "inprogress"
+
+
+def test_repeated_retries_of_an_experiment_that_fails_before_starting_each_get_an_archive(tmp_path, monkeypatch):
+    experiment = _planned_for_failure(tmp_path)
+
+    def reject_inputs(_experiment):
+        raise WorkerError("planned input is missing")
+
+    monkeypatch.setattr(worker_module, "verify_planned_inputs", reject_inputs)
+
+    first = execute_paths(BatchRequest((experiment.root,)))
+    second = execute_paths(BatchRequest((experiment.root,), retry=True))
+    third = execute_paths(BatchRequest((experiment.root,), retry=True))
+
+    assert (first.failed, second.failed, third.failed) == (1, 1, 1)
+    assert (second.invalid, third.invalid) == (0, 0)
+    assert len(list(experiment.root.glob("attempt-*"))) == RETRIES_AFTER_PRESTART_FAILURE
 

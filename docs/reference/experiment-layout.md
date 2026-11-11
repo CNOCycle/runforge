@@ -84,7 +84,7 @@ See [Matrices and mapping](../guides/matrices-and-mapping.md).
 | `artifacts/` | The child command | Yes |
 | `.workspace/` | Worker, for Git and snapshot execution | Normally created and removed per execution |
 | `claim/` | Worker, while executing | Created and removed |
-| `attempt-NNNN/` | Retry | Written once per attempt |
+| `attempt-NNNN/` | Retry | Written once per attempt; a retry after a failure before the command started adds `-1`, `-2`, ... |
 
 The immutable files are the experiment's identity. A worker verifies every
 planned input digest and, for non-Git modes, the complete source manifest before

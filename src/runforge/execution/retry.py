@@ -100,7 +100,7 @@ def prepare_retry(
         verify_claim_owner(layout, claim)
         claim_cleared = False
     forced = state_forced or claim_cleared
-    archive = layout.root / f"attempt-{previous_status.attempt:04d}"
+    archive = _archive_path(layout.root, previous_status)
     prepared_status = replace(
         previous_status,
         state="init",
@@ -199,6 +199,20 @@ def _archive_and_reset(
         if isinstance(error, Exception):
             raise RetryError(f"Could not prepare retry for {experiment.root}: {error}") from error
         raise
+
+
+def _archive_path(root: Path, previous: ExperimentStatus) -> Path:
+    """Name the archive after the attempt number.
+
+    A failure before the command starts never advances the number, so its archives take a suffix. An
+    existing archive of a started attempt is still refused by ``_validate_retry_archive``.
+    """
+    archive = root / f"attempt-{previous.attempt:04d}"
+    suffix = 0
+    while previous.started_at is None and not is_absent(archive):
+        suffix += 1
+        archive = root / f"attempt-{previous.attempt:04d}-{suffix}"
+    return archive
 
 
 def _validate_retry_archive(archive: Path) -> None:
