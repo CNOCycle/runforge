@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 
 from runforge.cli import main
-from runforge.cli.output import print_worker_progress
-from runforge.execution.worker import WorkerProgressEvent
+from runforge.cli.output import print_worker_progress, print_worker_summary
+from runforge.execution.worker import WorkerProgressEvent, WorkerResult
 from runforge.infrastructure.json_store import load_json_object, save_json_object
 from runforge.planning.planner import PlanRequest, plan_experiment
 from runforge.schemas.experiment import ExperimentCommand, ExperimentConfiguration, ExperimentStatus
@@ -336,6 +336,29 @@ def test_worker_cli_prints_effective_arguments_progress_and_summary(tmp_path, ca
     assert "    stale after claim: 0" in output
     assert "  deferred: 0" in output
     assert "  invalid: 0" in output
+
+
+def test_worker_summary_lists_held_experiments_under_skipped(tmp_path, capsys):
+    result = WorkerResult(
+        root=tmp_path,
+        candidates=5,
+        selected=0,
+        completed=0,
+        failed=0,
+        not_runnable=1,
+        claim_contended=0,
+        stale_skipped=0,
+        deferred=0,
+        invalid=0,
+        held=2,
+    )
+
+    print_worker_summary(result)
+
+    output = capsys.readouterr().out
+    assert "  skipped: 3" in output
+    assert "    held: 2" in output
+    assert "\n  held:" not in output
 
 
 def _plan_worker_experiment(tmp_path: Path, reports: Path, name: str, script: str) -> Path:

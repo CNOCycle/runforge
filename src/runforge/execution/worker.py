@@ -80,11 +80,14 @@ class _ExecutionOptions:
     claim: ExperimentClaim
 
 
+ProgressPhase = Literal["preparing", "executing", "completed", "failed", "warning", "recovery"]
+
+
 @dataclass(frozen=True)
 class WorkerProgressEvent:
     """One observable worker lifecycle transition."""
 
-    phase: Literal["preparing", "executing", "completed", "failed", "warning", "recovery"]
+    phase: ProgressPhase
     experiment: Path
     stdout_log: Path
     stderr_log: Path
@@ -194,7 +197,15 @@ def execute_paths(
         if not request.retry or any(Path(path).expanduser().resolve() not in experiments for path in request.paths):
             raise WorkerError("Forced retry requires explicit experiment-directory paths, not report roots")
     if progress is not None:
-        for path, message in recovery_messages(initial.experiments):
+        # A forced retry already confirmed these interrupted experiments; the guidance would tell the
+        # operator to run the command being executed. Held ones still need it, and so do states that
+        # cannot be force-retried.
+        unconfirmed = [
+            item
+            for item in initial.experiments
+            if item.held or not (request.force and is_retryable_state(item.status.state, force=True))
+        ]
+        for path, message in recovery_messages(unconfirmed):
             _notify_progress(
                 progress,
                 replace(_progress_event("recovery", ExperimentDirectory(path), request.stream_output), error=message),
@@ -327,16 +338,9 @@ def _process_worker_candidate(
     progress: Callable[[WorkerProgressEvent], None] | None,
 ) -> Literal["completed", "failed", "claim_contended", "stale", "held", "invalid"]:
     """Acquire ownership before retry preparation and execution-boundary rereads."""
-    try:
-        if request.retry:
-            claim, overridden = acquire_retry_claim(experiment, force=request.force)
-        else:
-            claim, overridden = try_acquire_claim(experiment), False
-    except (ClaimError, RetryError, ValueError) as error:
-        return _claim_failure_outcome(experiment, request, progress, error)
+    claim, overridden, outcome = _acquire_candidate_claim(experiment, request, progress)
     if claim is None:
-        _report_retry_contention(experiment, request, progress)
-        return "claim_contended"
+        return outcome
     execution_progress = _ExecutionProgress(progress)
     try:
         if request.retry:
@@ -360,6 +364,32 @@ def _process_worker_candidate(
         if claim is not None:
             _release_execution_claim(experiment, claim, stream_output=request.stream_output, progress=progress)
     return "completed" if exit_code == 0 else "failed"
+
+
+def _acquire_candidate_claim(experiment, request, progress):
+    """Return the claim and whether it overrode one, or no claim and the outcome that ends the candidate."""
+    try:
+        if request.retry:
+            claim, overridden = acquire_retry_claim(experiment, force=request.force)
+        else:
+            claim, overridden = try_acquire_claim(experiment), False
+    except ExperimentHeldError:
+        return None, False, "held"
+    except (ClaimError, RetryError, SchedulingError, ValueError) as error:
+        return None, False, _claim_failure_outcome(experiment, request, progress, error)
+    if claim is None:
+        if overridden:
+            _notify_progress(
+                progress,
+                replace(
+                    _progress_event("warning", experiment, request.stream_output),
+                    error="Forced retry cleared the previous claim, but another worker acquired the experiment first",
+                ),
+            )
+        else:
+            _report_retry_contention(experiment, request, progress)
+        return None, overridden, "claim_contended"
+    return claim, overridden, None
 
 
 def _execution_error_outcome(experiment, request, progress, error, reported_failure):
@@ -462,19 +492,13 @@ def _run_claimed_experiment(
             status,
             _ExecutionOptions(stream_output, progress, claim),
         )
-    except WorkerError as error:
-        _save_claimed_status(experiment, claim, _failed_status(experiment, status, str(error)))
-        _notify_progress(
-            progress,
-            replace(
-                _progress_event("failed", experiment, stream_output, command=configuration.command),
-                error=str(error),
-            ),
-        )
-        raise
-    except OSError as error:
-        failure = WorkerError(str(error))
-        _save_claimed_status(experiment, claim, _failed_status(experiment, status, str(failure)))
+    except Exception as error:  # noqa: BLE001 - any failure after the claim must leave a recorded outcome
+        failure = error if isinstance(error, WorkerError) else WorkerError(str(error))
+        try:
+            _save_claimed_status(experiment, claim, _failed_status(experiment, status, str(failure)))
+        except ClaimError:
+            # Ownership was lost, so the status now belongs to the new owner and is left untouched.
+            pass
         _notify_progress(
             progress,
             replace(
@@ -482,6 +506,8 @@ def _run_claimed_experiment(
                 error=str(failure),
             ),
         )
+        if failure is error:
+            raise
         raise failure from error
     phase = "completed" if exit_code == 0 else "failed"
     event_error = None if exit_code == 0 else f"Command exited with status {exit_code}"
@@ -573,7 +599,7 @@ def _run_in_working_directory(
 
 
 def _progress_event(
-    phase: Literal["preparing", "executing", "completed", "failed", "warning", "recovery"],
+    phase: ProgressPhase,
     experiment: ExperimentDirectory,
     stream_output: bool,
     *,

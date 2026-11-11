@@ -128,6 +128,14 @@ def test_without_the_confirmation_flag_it_warns_and_changes_nothing(machine, cap
     assert not (machine.reports / ".onstart.lock").exists()
 
 
+def test_a_missing_report_root_without_the_flag_still_prints_the_warning_and_the_refusal(tmp_path, capsys):
+    assert main(["onstart", str(tmp_path / "missing")]) == CLI_ERROR_EXIT
+
+    error = capsys.readouterr().err
+    assert "warning: runforge onstart force-retries" in error
+    assert "refusing to continue without --single-node" in error
+
+
 def test_a_missing_report_root_is_an_error(tmp_path, capsys):
     assert main(["onstart", "--single-node", str(tmp_path / "missing")]) == CLI_ERROR_EXIT
     assert "not a directory" in capsys.readouterr().err

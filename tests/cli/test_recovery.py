@@ -88,6 +88,92 @@ def test_startup_reports_interrupted_work_and_continues_other_experiments(tmp_pa
     assert not list(stopped.root.glob("attempt-*"))
 
 
+def test_forced_retry_does_not_repeat_the_guidance_to_run_the_forced_retry(tmp_path, capsys):
+    repository = create_git_repository(tmp_path / "repository", {"train.py": "print('done')\n"})
+    stopped = ExperimentDirectory(_plan(repository, tmp_path / "reports", "a-stopped"))
+    _existing(stopped)
+
+    assert main(["retry", "--force", str(stopped.root)]) == 0
+
+    error = capsys.readouterr().err
+    assert "after confirmation: runforge retry --force" not in error
+    assert "Forced retry cannot prove that the previous worker has stopped" in error
+    assert stopped.load_status().state == "completed"
+
+
+def test_forced_retry_reports_a_cleared_claim_that_another_worker_took_first(tmp_path, monkeypatch, capsys):
+    repository = create_git_repository(tmp_path / "repository", {"train.py": "print('done')\n"})
+    stopped = ExperimentDirectory(_plan(repository, tmp_path / "reports", "a-stopped"))
+    _existing(stopped)
+    monkeypatch.setattr("runforge.execution.retry.try_acquire_claim", lambda experiment: None)
+
+    main(["retry", "--force", str(stopped.root)])
+
+    assert "another worker acquired the experiment first" in capsys.readouterr().err
+    assert stopped.load_status().state == "inprogress"
+
+
+INVALID_EXIT_CODE = 2
+HOLD_VICTIM_SCRIPT = """\
+import json, os, pathlib
+victim = pathlib.Path(pathlib.Path(VICTIM_FILE).read_text().strip())
+if pathlib.Path(os.environ["RUNFORGE_ARTIFACT_DIR"]).parent != victim:
+    (victim / "schedule.json").write_text(json.dumps(
+        {"kind": "runforge_schedule", "schema_version": 1, "held": True, "updated_at": "2026-11-10T00:00:00Z"}))
+"""
+
+
+def test_forced_retry_keeps_the_claim_of_an_experiment_held_after_discovery(tmp_path, capsys):
+    # The runner's command writes the hold while the batch is already running, after discovery built its queue.
+    repository = create_git_repository(
+        tmp_path / "repository",
+        {"train.py": HOLD_VICTIM_SCRIPT.replace("VICTIM_FILE", repr(str(tmp_path / "victim.txt")))},
+    )
+    reports = tmp_path / "reports"
+    first = ExperimentDirectory(_plan(repository, reports, "a-first"))
+    second = ExperimentDirectory(_plan(repository, reports, "b-second"))
+    runner, victim = sorted((first, second), key=lambda layout: layout.root)
+    (tmp_path / "victim.txt").write_text(str(victim.root), encoding="utf-8")
+    runner.save_status(replace(runner.load_status(), state="failed", attempt=1))
+    _existing(victim)
+    before = (victim.status_file.read_bytes(), victim.claim_file.read_bytes())
+
+    main(["retry", "--force", str(runner.root), str(victim.root)])
+
+    capsys.readouterr()
+    assert runner.load_status().state == "completed"
+    assert victim.claim_file.exists()
+    assert (victim.status_file.read_bytes(), victim.claim_file.read_bytes()) == before
+    assert not list(victim.root.glob("attempt-*"))
+
+
+def test_malformed_hold_written_after_discovery_invalidates_only_that_candidate(tmp_path, capsys):
+    hold = HOLD_VICTIM_SCRIPT[HOLD_VICTIM_SCRIPT.index("    (victim"):]
+    script = HOLD_VICTIM_SCRIPT.replace(hold, '    (victim / "schedule.json").write_text("{broken JSON")\n')
+    assert script != HOLD_VICTIM_SCRIPT
+    repository = create_git_repository(
+        tmp_path / "repository",
+        {"train.py": script.replace("VICTIM_FILE", repr(str(tmp_path / "victim.txt")))},
+    )
+    reports = tmp_path / "reports"
+    first = ExperimentDirectory(_plan(repository, reports, "a-first"))
+    second = ExperimentDirectory(_plan(repository, reports, "b-second"))
+    third = ExperimentDirectory(_plan(repository, reports, "c-third"))
+    victim = second
+    (tmp_path / "victim.txt").write_text(str(victim.root), encoding="utf-8")
+    for layout in (first, third):
+        layout.save_status(replace(layout.load_status(), state="failed", attempt=1))
+    _existing(victim)
+
+    exit_code = main(["retry", "--force", str(first.root), str(victim.root), str(third.root)])
+
+    capsys.readouterr()
+    assert exit_code == INVALID_EXIT_CODE
+    assert first.load_status().state == "completed"
+    assert third.load_status().state == "completed"
+    assert victim.claim_file.exists()
+
+
 def test_startup_names_the_workdir_left_inside_an_interrupted_experiment(tmp_path, capsys):
     repository = create_git_repository(tmp_path / "repository", {"train.py": "print('done')\n"})
     with_workdir = ExperimentDirectory(_plan(repository, tmp_path / "reports", "a-with-workdir"))

@@ -8,7 +8,8 @@ import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from runforge.execution.errors import ExperimentNotRunnableError
+from runforge.execution.errors import ExperimentHeldError, ExperimentNotRunnableError
+from runforge.execution.scheduling import is_held
 from runforge.infrastructure.claims import (
     ClaimError,
     ExperimentClaim,
@@ -99,7 +100,7 @@ def prepare_retry(
         verify_claim_owner(layout, claim)
         claim_cleared = False
     forced = state_forced or claim_cleared
-    archive = layout.root / f"attempt-{previous_status.attempt:04d}"
+    archive = _archive_path(layout.root, previous_status)
     prepared_status = replace(
         previous_status,
         state="init",
@@ -147,10 +148,9 @@ def _prepare_retry_claim(experiment: ExperimentDirectory, *, force: bool) -> boo
             "use force=True only after confirming its worker stopped"
         )
     try:
-        clear_claim(experiment)
+        return _clear_existing_claim(experiment)
     except ClaimError as error:
         raise RetryError(str(error)) from error
-    return True
 
 
 def _archive_and_reset(
@@ -199,6 +199,20 @@ def _archive_and_reset(
         if isinstance(error, Exception):
             raise RetryError(f"Could not prepare retry for {experiment.root}: {error}") from error
         raise
+
+
+def _archive_path(root: Path, previous: ExperimentStatus) -> Path:
+    """Name the archive after the attempt number.
+
+    A failure before the command starts never advances the number, so its archives take a suffix. An
+    existing archive of a started attempt is still refused by ``_validate_retry_archive``.
+    """
+    archive = root / f"attempt-{previous.attempt:04d}"
+    suffix = 0
+    while previous.started_at is None and not is_absent(archive):
+        suffix += 1
+        archive = root / f"attempt-{previous.attempt:04d}-{suffix}"
+    return archive
 
 
 def _validate_retry_archive(archive: Path) -> None:
@@ -268,8 +282,16 @@ def acquire_retry_claim(experiment: ExperimentDirectory, *, force: bool = False)
     """Validate before an explicit force override, then acquire preparation ownership."""
     _configuration, status = experiment.load_metadata()
     _validate_retry_state(status, force=force)
-    overridden = False
-    if force and experiment.claim.exists():
-        clear_claim(experiment)
-        overridden = True
+    if force and is_held(experiment):
+        # A hold written after discovery must not cost the previous owner's claim evidence.
+        raise ExperimentHeldError(f"Experiment is held: {experiment.root}")
+    overridden = _clear_existing_claim(experiment) if force else False
     return try_acquire_claim(experiment), overridden
+
+
+def _clear_existing_claim(experiment: ExperimentDirectory) -> bool:
+    """Clear a claim left by a worker the operator confirmed stopped; report whether one existed."""
+    if not experiment.claim.exists():
+        return False
+    clear_claim(experiment)
+    return True

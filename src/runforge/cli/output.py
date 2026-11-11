@@ -190,7 +190,7 @@ def print_worker_summary(result: WorkerResult, *, label: str = "Worker") -> None
     _worker_print(f"    non-runnable: {result.not_runnable}")
     _worker_print(f"    claim contention: {result.claim_contended}")
     _worker_print(f"    stale after claim: {result.stale_skipped}")
-    _worker_print(f"  held: {result.held}")
+    _worker_print(f"    held: {result.held}")
     _worker_print(f"  deferred: {result.deferred}")
     _worker_print(f"  invalid: {result.invalid}")
 

@@ -16,10 +16,30 @@ and, for scheduler or container owners, [Slurm and containers](slurm-and-contain
 
 ## An experiment is stuck in `inprogress`
 
-It may still be running, or its worker may have died. Nothing recovers an
-interrupted run automatically; see
+It may still be running, or its worker may have died. RunForge never recovers
+an interrupted run on its own; recovery starts only when you run a command. See
 [Worker lifecycle and claims](../architecture/worker-lifecycle-and-claims.md).
-Use `retry --force` only after confirming both worker and child have stopped.
+To list candidates, run `runforge discover --older-than 6h PATH` (or
+`--started-before TIME`); it adds a `stale:` line under each `inprogress`
+experiment started before the cutoff. That is a hint only and prints no retry
+command. When you start `runforge run` or `runforge retry` on a report root, it
+first prints a recovery note for each `inprogress` or claimed experiment whose
+worker is stale or cannot be verified, then goes on to run the other eligible
+experiments. Printing the notes leaves those experiments unchanged. A note shows
+the recorded owner and an assessment (stale or unknown) and then, by evidence:
+the `runforge retry --force` command when a force retry applies; a `ps` check
+instead when the recorded PID is still running; or, for a `created` or `init`
+claim, that it cannot be force-retried and needs inspection. A claim verified as
+active gets no note.
+
+- Use `retry --force` only after confirming both worker and child have stopped.
+  Add `--reuse-artifacts` to copy the previous artifacts back for a program that
+  resumes from its own checkpoints; see
+  [Reuse artifacts](../guides/workers-and-recovery.md#reuse-artifacts-for-application-checkpoint-recovery).
+- On an interruptible machine that has just started and shares its report root
+  with no other machine, `runforge onstart --single-node PATH` restarts every
+  `inprogress` experiment this way and then runs the remaining plans. See
+  [Interruptible machines](interruptible-machines.md).
 
 ## `run` exits 2 but everything looks fine
 

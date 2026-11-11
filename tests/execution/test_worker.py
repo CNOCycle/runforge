@@ -22,6 +22,7 @@ from tests.support import create_git_repository, git
 
 
 FAILURE_EXIT_CODE = 7
+RETRIES_AFTER_PRESTART_FAILURE = 2
 
 
 def _repository(tmp_path: Path, script: str) -> Path:
@@ -822,3 +823,68 @@ def test_worker_records_directory_snapshot_command_failure(tmp_path):
     status = ExperimentStatus.from_dict(load_json_object(experiment / "status.json"))
     assert status.state == "failed"
     assert status.error == "Command exited with status 7"
+
+
+def _planned_for_failure(tmp_path):
+    repository = _repository(tmp_path, "print('ok')\n")
+    return ExperimentDirectory.resolve(
+        plan_experiment(
+            PlanRequest(
+                name="unexpected",
+                command=ExperimentCommand.argv((sys.executable, "train.py")),
+                output_root=tmp_path / "reports",
+                source_path=repository,
+            )
+        )
+    )
+
+
+def test_an_unexpected_exception_after_start_records_the_experiment_as_failed(tmp_path, monkeypatch):
+    experiment = _planned_for_failure(tmp_path)
+    events = []
+
+    def explode(*arguments, **keywords):
+        raise RuntimeError("unexpected boom")
+
+    monkeypatch.setattr(worker_module, "run_command", explode)
+
+    result = execute_paths(BatchRequest((experiment.root,)), progress=events.append)
+
+    status = experiment.load_status()
+    assert status.state == "failed"
+    assert status.error == "unexpected boom"
+    assert result.failed == 1
+    assert [event.phase for event in events if event.phase == "failed"] == ["failed"]
+
+
+def test_lost_claim_ownership_leaves_the_new_owners_status_untouched(tmp_path, monkeypatch):
+    experiment = _planned_for_failure(tmp_path)
+
+    def lose_the_claim(*arguments, **keywords):
+        shutil.rmtree(experiment.claim)
+        raise ClaimError("claim ownership was lost")
+
+    monkeypatch.setattr(worker_module, "run_command", lose_the_claim)
+
+    result = execute_paths(BatchRequest((experiment.root,)))
+
+    assert result.failed == 1
+    assert experiment.load_status().state == "inprogress"
+
+
+def test_repeated_retries_of_an_experiment_that_fails_before_starting_each_get_an_archive(tmp_path, monkeypatch):
+    experiment = _planned_for_failure(tmp_path)
+
+    def reject_inputs(_experiment):
+        raise WorkerError("planned input is missing")
+
+    monkeypatch.setattr(worker_module, "verify_planned_inputs", reject_inputs)
+
+    first = execute_paths(BatchRequest((experiment.root,)))
+    second = execute_paths(BatchRequest((experiment.root,), retry=True))
+    third = execute_paths(BatchRequest((experiment.root,), retry=True))
+
+    assert (first.failed, second.failed, third.failed) == (1, 1, 1)
+    assert (second.invalid, third.invalid) == (0, 0)
+    assert len(list(experiment.root.glob("attempt-*"))) == RETRIES_AFTER_PRESTART_FAILURE
+
