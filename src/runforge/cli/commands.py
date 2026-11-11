@@ -73,13 +73,13 @@ def _execute_and_summarize(request: BatchRequest, *, label: str = "Execution") -
 
 def onstart(arguments: argparse.Namespace) -> int:
     """Restart interrupted experiments, then run the rest, on a single machine that just started."""
-    root = arguments.path.expanduser()
-    if not root.is_dir():
-        raise DiscoveryError(f"Report root is not a directory: {root}")
     print_onstart_warning()
     if not arguments.single_node:
         print("error: refusing to continue without --single-node; nothing was changed", file=sys.stderr)
         return 2
+    root = arguments.path.expanduser()
+    if not root.is_dir():
+        raise DiscoveryError(f"Report root is not a directory: {root}")
     root = root.resolve()
     print_effective_arguments(
         "onstart",
