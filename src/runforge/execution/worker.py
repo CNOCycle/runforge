@@ -80,11 +80,14 @@ class _ExecutionOptions:
     claim: ExperimentClaim
 
 
+ProgressPhase = Literal["preparing", "executing", "completed", "failed", "warning", "recovery"]
+
+
 @dataclass(frozen=True)
 class WorkerProgressEvent:
     """One observable worker lifecycle transition."""
 
-    phase: Literal["preparing", "executing", "completed", "failed", "warning", "recovery"]
+    phase: ProgressPhase
     experiment: Path
     stdout_log: Path
     stderr_log: Path
@@ -194,7 +197,15 @@ def execute_paths(
         if not request.retry or any(Path(path).expanduser().resolve() not in experiments for path in request.paths):
             raise WorkerError("Forced retry requires explicit experiment-directory paths, not report roots")
     if progress is not None:
-        for path, message in recovery_messages(initial.experiments):
+        # A forced retry already confirmed these interrupted experiments; the guidance would tell the
+        # operator to run the command being executed. Held ones still need it, and so do states that
+        # cannot be force-retried.
+        unconfirmed = [
+            item
+            for item in initial.experiments
+            if item.held or not (request.force and is_retryable_state(item.status.state, force=True))
+        ]
+        for path, message in recovery_messages(unconfirmed):
             _notify_progress(
                 progress,
                 replace(_progress_event("recovery", ExperimentDirectory(path), request.stream_output), error=message),
@@ -462,18 +473,8 @@ def _run_claimed_experiment(
             status,
             _ExecutionOptions(stream_output, progress, claim),
         )
-    except WorkerError as error:
-        _save_claimed_status(experiment, claim, _failed_status(experiment, status, str(error)))
-        _notify_progress(
-            progress,
-            replace(
-                _progress_event("failed", experiment, stream_output, command=configuration.command),
-                error=str(error),
-            ),
-        )
-        raise
-    except OSError as error:
-        failure = WorkerError(str(error))
+    except (WorkerError, OSError) as error:
+        failure = error if isinstance(error, WorkerError) else WorkerError(str(error))
         _save_claimed_status(experiment, claim, _failed_status(experiment, status, str(failure)))
         _notify_progress(
             progress,
@@ -482,6 +483,8 @@ def _run_claimed_experiment(
                 error=str(failure),
             ),
         )
+        if failure is error:
+            raise
         raise failure from error
     phase = "completed" if exit_code == 0 else "failed"
     event_error = None if exit_code == 0 else f"Command exited with status {exit_code}"
@@ -573,7 +576,7 @@ def _run_in_working_directory(
 
 
 def _progress_event(
-    phase: Literal["preparing", "executing", "completed", "failed", "warning", "recovery"],
+    phase: ProgressPhase,
     experiment: ExperimentDirectory,
     stream_output: bool,
     *,

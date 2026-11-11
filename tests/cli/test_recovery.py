@@ -88,6 +88,19 @@ def test_startup_reports_interrupted_work_and_continues_other_experiments(tmp_pa
     assert not list(stopped.root.glob("attempt-*"))
 
 
+def test_forced_retry_does_not_repeat_the_guidance_to_run_the_forced_retry(tmp_path, capsys):
+    repository = create_git_repository(tmp_path / "repository", {"train.py": "print('done')\n"})
+    stopped = ExperimentDirectory(_plan(repository, tmp_path / "reports", "a-stopped"))
+    _existing(stopped)
+
+    assert main(["retry", "--force", str(stopped.root)]) == 0
+
+    error = capsys.readouterr().err
+    assert "after confirmation: runforge retry --force" not in error
+    assert "Forced retry cannot prove that the previous worker has stopped" in error
+    assert stopped.load_status().state == "completed"
+
+
 def test_startup_names_the_workdir_left_inside_an_interrupted_experiment(tmp_path, capsys):
     repository = create_git_repository(tmp_path / "repository", {"train.py": "print('done')\n"})
     with_workdir = ExperimentDirectory(_plan(repository, tmp_path / "reports", "a-with-workdir"))
