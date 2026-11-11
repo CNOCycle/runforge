@@ -147,10 +147,9 @@ def _prepare_retry_claim(experiment: ExperimentDirectory, *, force: bool) -> boo
             "use force=True only after confirming its worker stopped"
         )
     try:
-        clear_claim(experiment)
+        return _clear_existing_claim(experiment)
     except ClaimError as error:
         raise RetryError(str(error)) from error
-    return True
 
 
 def _archive_and_reset(
@@ -268,8 +267,13 @@ def acquire_retry_claim(experiment: ExperimentDirectory, *, force: bool = False)
     """Validate before an explicit force override, then acquire preparation ownership."""
     _configuration, status = experiment.load_metadata()
     _validate_retry_state(status, force=force)
-    overridden = False
-    if force and experiment.claim.exists():
-        clear_claim(experiment)
-        overridden = True
+    overridden = _clear_existing_claim(experiment) if force else False
     return try_acquire_claim(experiment), overridden
+
+
+def _clear_existing_claim(experiment: ExperimentDirectory) -> bool:
+    """Clear a claim left by a worker the operator confirmed stopped; report whether one existed."""
+    if not experiment.claim.exists():
+        return False
+    clear_claim(experiment)
+    return True
