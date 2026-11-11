@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import sys
 import warnings
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TypeVar
 
 from runforge.cli.output import (
     path_text,
@@ -32,7 +34,11 @@ from runforge.execution.scheduling import SchedulingError, set_hold
 from runforge.execution.worker import BatchRequest, execute_paths
 from runforge.infrastructure.claims import ClaimError
 from runforge.planning.matrix_mapping import build_matrix_mapping, save_matrix_mapping
-from runforge.planning.planner import MatrixPlanRequest, PlanRequest, plan_experiment, plan_matrix
+from runforge.planning.planner import plan_experiment, plan_matrix
+
+
+_Request = TypeVar("_Request")
+_Planned = TypeVar("_Planned")
 
 
 def run(arguments: argparse.Namespace) -> int:
@@ -46,7 +52,7 @@ def run(arguments: argparse.Namespace) -> int:
     else:
         rows.append(("max tasks", str(arguments.max_tasks) if arguments.max_tasks else "unlimited"))
     print_effective_arguments(arguments.command_name, rows)
-    result = execute_paths(
+    return _execute_and_summarize(
         BatchRequest(
             expand_path_arguments(tuple(arguments.paths)),
             arguments.max_tasks,
@@ -54,10 +60,14 @@ def run(arguments: argparse.Namespace) -> int:
             retry=arguments.retry,
             force=arguments.force,
             reuse_artifacts=arguments.reuse_artifacts,
-        ),
-        progress=print_worker_progress,
+        )
     )
-    print_worker_summary(result, label="Execution")
+
+
+def _execute_and_summarize(request: BatchRequest, *, label: str = "Execution") -> int:
+    """Run one finite batch, print its progress and summary, and return its exit code."""
+    result = execute_paths(request, progress=print_worker_progress)
+    print_worker_summary(result, label=label)
     return result.exit_code
 
 
@@ -85,26 +95,23 @@ def onstart(arguments: argparse.Namespace) -> int:
         exit_code = 0
         for experiment in found.restart:
             exit_code = max(exit_code, _restart_interrupted(experiment, arguments.stream_output))
-        result = execute_paths(BatchRequest((root,), None, arguments.stream_output), progress=print_worker_progress)
-        print_worker_summary(result, label="Execution")
+        exit_code = max(exit_code, _execute_and_summarize(BatchRequest((root,), None, arguments.stream_output)))
         if found.held or found.unstarted_claimed:
             print("Left unchanged:")
             print_onstart_left_unchanged(found)
-        return max(exit_code, result.exit_code)
+        return exit_code
 
 
 def _restart_interrupted(experiment: Path, stream_output: bool) -> int:
     """Force-retry one experiment with its artifacts restored; a failure is reported, never repeated."""
     try:
-        result = execute_paths(
+        return _execute_and_summarize(
             BatchRequest((experiment,), None, stream_output, retry=True, force=True, reuse_artifacts=True),
-            progress=print_worker_progress,
+            label="Recovery",
         )
     except (ClaimError, RetryError, WorkerError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
-    print_worker_summary(result, label="Recovery")
-    return result.exit_code
 
 
 def matrix(arguments: argparse.Namespace) -> int:
@@ -117,7 +124,7 @@ def matrix(arguments: argparse.Namespace) -> int:
             ("matrix combinations", str(len(request.combinations))),
         ),
     )
-    experiments = _plan_matrix_with_warnings(request)
+    experiments = _with_printed_warnings(plan_matrix, request)
     # The plans are already published and runnable, so a mapping failure must
     # not hide them or make a successful expansion look like a failed one.
     try:
@@ -142,15 +149,11 @@ def plan(arguments: argparse.Namespace) -> int:
         return matrix(arguments)
     request = planning_request(arguments)
     print_planning_arguments(arguments, request)
-    experiment = _plan_with_warnings(request)
+    experiment = _with_printed_warnings(plan_experiment, request)
     print(f"Experiment plan created at: {experiment}", flush=True)
     if not arguments.execute_after_plan:
         return 0
-    result = execute_paths(
-        BatchRequest((experiment,), stream_output=arguments.stream_output), progress=print_worker_progress
-    )
-    print_worker_summary(result, label="Execution")
-    return result.exit_code
+    return _execute_and_summarize(BatchRequest((experiment,), stream_output=arguments.stream_output))
 
 
 def discover(arguments: argparse.Namespace) -> int:
@@ -175,22 +178,14 @@ def _resolve_stale_cutoff(arguments: argparse.Namespace) -> datetime | None:
     return None
 
 
-def _plan_with_warnings(request: PlanRequest) -> Path:
+def _with_printed_warnings(plan: Callable[[_Request], _Planned], request: _Request) -> _Planned:
+    """Plan with every Python warning recorded and echoed to stderr as ``warning: ...``."""
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
-        experiment = plan_experiment(request)
+        planned = plan(request)
     for captured_warning in captured:
         print(f"warning: {captured_warning.message}", file=sys.stderr)
-    return experiment
-
-
-def _plan_matrix_with_warnings(request: MatrixPlanRequest) -> tuple[Path, ...]:
-    with warnings.catch_warnings(record=True) as captured:
-        warnings.simplefilter("always")
-        experiments = plan_matrix(request)
-    for captured_warning in captured:
-        print(f"warning: {captured_warning.message}", file=sys.stderr)
-    return experiments
+    return planned
 
 
 def schedule(arguments: argparse.Namespace) -> int:
