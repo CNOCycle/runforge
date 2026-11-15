@@ -12,7 +12,6 @@ from runforge.execution.discovery import DiscoveredExperiment, DiscoveryError, D
 from runforge.execution.errors import ExperimentHeldError, ExperimentNotRunnableError, WorkerError
 from runforge.execution.process import CommandExecutionError, run_command
 from runforge.execution.recovery import recovery_messages
-from runforge.execution.retry import RetryError, acquire_retry_claim, is_retryable_state, prepare_retry
 from runforge.execution.scheduling import SchedulingError, is_held
 from runforge.execution.sources import preparation_for
 from runforge.execution.verification import verify_planned_inputs
@@ -65,10 +64,7 @@ class BatchRequest:
     paths: tuple[Path, ...]
     max_tasks: int | None = None
     stream_output: bool = False
-    retry: bool = False
-    force: bool = False
     require_each: bool = True
-    reuse_artifacts: bool = False
 
 
 @dataclass(frozen=True)
@@ -189,23 +185,9 @@ def execute_paths(
     limit = request.max_tasks
     if isinstance(limit, bool) or (limit is not None and (not isinstance(limit, int) or limit <= 0)):
         raise WorkerError("max_tasks must be a positive integer or None")
-    if request.reuse_artifacts and not request.retry:
-        raise WorkerError("Artifact reuse requires retry")
     initial = discover_paths(request.paths, require_each=request.require_each)
-    if request.force:
-        experiments = {item.path for item in initial.experiments}
-        if not request.retry or any(Path(path).expanduser().resolve() not in experiments for path in request.paths):
-            raise WorkerError("Forced retry requires explicit experiment-directory paths, not report roots")
     if progress is not None:
-        # A forced retry already confirmed these interrupted experiments; the guidance would tell the
-        # operator to run the command being executed. Held ones still need it, and so do states that
-        # cannot be force-retried.
-        unconfirmed = [
-            item
-            for item in initial.experiments
-            if item.held or not (request.force and is_retryable_state(item.status.state, force=True))
-        ]
-        for path, message in recovery_messages(unconfirmed):
+        for path, message in recovery_messages(initial.experiments):
             _notify_progress(
                 progress,
                 replace(_progress_event("recovery", ExperimentDirectory(path), request.stream_output), error=message),
@@ -233,8 +215,6 @@ class _BatchExecution:
         self.counts: Counter[str] = Counter()
 
     def _eligible(self, item: DiscoveredExperiment) -> bool:
-        if self.request.retry:
-            return is_retryable_state(item.status.state, force=self.request.force)
         return item.status.state in {"created", "init"}
 
     def _queue(self, discovery: DiscoveryResult) -> tuple[DiscoveredExperiment, ...]:
@@ -337,16 +317,12 @@ def _process_worker_candidate(
     *,
     progress: Callable[[WorkerProgressEvent], None] | None,
 ) -> Literal["completed", "failed", "claim_contended", "stale", "held", "invalid"]:
-    """Acquire ownership before retry preparation and execution-boundary rereads."""
-    claim, overridden, outcome = _acquire_candidate_claim(experiment, request, progress)
+    """Acquire ownership before execution-boundary rereads."""
+    claim, outcome = _acquire_candidate_claim(experiment, request, progress)
     if claim is None:
         return outcome
     execution_progress = _ExecutionProgress(progress)
     try:
-        if request.retry:
-            if is_held(experiment):
-                raise ExperimentHeldError(f"Experiment is held: {experiment.root}")
-            _prepare_candidate_retry(experiment, claim, request, progress, overridden)
         transferred_claim, claim = claim, None
         exit_code = run_experiment(
             experiment.root,
@@ -358,7 +334,7 @@ def _process_worker_candidate(
         return "held"
     except ExperimentNotRunnableError:
         return "stale"
-    except (WorkerError, RetryError, ValueError, OSError) as error:
+    except (WorkerError, ValueError, OSError) as error:
         return _execution_error_outcome(experiment, request, progress, error, execution_progress.failed)
     finally:
         if claim is not None:
@@ -367,29 +343,14 @@ def _process_worker_candidate(
 
 
 def _acquire_candidate_claim(experiment, request, progress):
-    """Return the claim and whether it overrode one, or no claim and the outcome that ends the candidate."""
+    """Return execution ownership or the outcome that ends this candidate."""
     try:
-        if request.retry:
-            claim, overridden = acquire_retry_claim(experiment, force=request.force)
-        else:
-            claim, overridden = try_acquire_claim(experiment), False
-    except ExperimentHeldError:
-        return None, False, "held"
-    except (ClaimError, RetryError, SchedulingError, ValueError) as error:
-        return None, False, _claim_failure_outcome(experiment, request, progress, error)
+        claim = try_acquire_claim(experiment)
+    except (ClaimError, SchedulingError, ValueError) as error:
+        return None, _claim_failure_outcome(experiment, request, progress, error)
     if claim is None:
-        if overridden:
-            _notify_progress(
-                progress,
-                replace(
-                    _progress_event("warning", experiment, request.stream_output),
-                    error="Forced retry cleared the previous claim, but another worker acquired the experiment first",
-                ),
-            )
-        else:
-            _report_retry_contention(experiment, request, progress)
-        return None, overridden, "claim_contended"
-    return claim, overridden, None
+        return None, "claim_contended"
+    return claim, None
 
 
 def _execution_error_outcome(experiment, request, progress, error, reported_failure):
@@ -401,23 +362,7 @@ def _execution_error_outcome(experiment, request, progress, error, reported_fail
                 error=str(error),
             ),
         )
-    # Retry archival/preparation failures never started an execution attempt.
-    return "invalid" if isinstance(error, (SchedulingError, RetryError)) else "failed"
-
-
-def _report_retry_contention(experiment, request, progress) -> None:
-    """Guide an explicitly named retry without changing batch skip semantics."""
-    if request.retry and experiment.root in {Path(path).expanduser().resolve() for path in request.paths}:
-        _notify_progress(
-            progress,
-            replace(
-                _progress_event("warning", experiment, request.stream_output),
-                error=(
-                    f"Experiment is already claimed ({describe_claim_holder(experiment)}); "
-                    "use retry --force only after independently confirming its worker and child processes stopped"
-                ),
-            ),
-        )
+    return "invalid" if isinstance(error, SchedulingError) else "failed"
 
 
 def _claim_failure_outcome(experiment, request, progress, error):
@@ -432,20 +377,6 @@ def _claim_failure_outcome(experiment, request, progress, error):
     )
     # Ownership was never acquired, so no execution attempt failed.
     return "invalid"
-
-
-def _prepare_candidate_retry(experiment, claim, request, progress, overridden) -> None:
-    preparation = prepare_retry(
-        experiment.root, force=request.force, claim=claim, reuse_artifacts=request.reuse_artifacts
-    )
-    if preparation.forced or overridden:
-        _notify_progress(
-            progress,
-            replace(
-                _progress_event("warning", experiment, request.stream_output),
-                error="Forced retry cannot prove that the previous worker has stopped",
-            ),
-        )
 
 
 def _run_claimed_experiment(

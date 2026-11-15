@@ -10,7 +10,6 @@ import pytest
 import runforge.execution.retry as retry_module
 from runforge.cli import main
 from runforge.execution.scheduling import set_hold
-from runforge.execution.worker import BatchRequest, WorkerError, execute_paths
 from runforge.infrastructure.claims import try_acquire_claim
 from runforge.infrastructure.storage import ExperimentDirectory
 from runforge.planning.planner import PlanRequest, plan_experiment
@@ -62,9 +61,16 @@ def test_retry_checkpoint_continuation_is_opt_in(tmp_path, capsys, reuse, root_s
     target = reports if root_selection else layout.root
     options = ["--reuse-artifacts"] if reuse else []
 
-    assert main(["retry", *options, str(target)]) == (0 if reuse else 1)
-
+    assert main(["retry", *options, str(target)]) == 0
     captured = capsys.readouterr()
+    assert layout.load_status().state == "init"
+    assert layout.load_status().attempt == 1
+    assert not layout.stdout_log.exists()
+    if reuse:
+        assert (layout.artifacts / "checkpoint.txt").read_text() == "3"
+    else:
+        assert list(layout.artifacts.iterdir()) == []
+    assert main(["run", str(layout.root)]) == (0 if reuse else 1)
     archive = layout.root / "attempt-0001"
     assert layout.load_status().attempt == SECOND_ATTEMPT
     assert layout.load_status().state == ("completed" if reuse else "failed")
@@ -90,7 +96,10 @@ def test_bulk_retry_reuses_each_experiments_own_artifacts(tmp_path, capsys):
 
     assert main(["retry", "--reuse-artifacts", str(reports)]) == 0
 
-    assert "  completed: 2" in capsys.readouterr().out
+    assert "  prepared: 2" in capsys.readouterr().out
+    assert all(layout.load_status().state == "init" for layout in (first, second))
+    assert all(layout.load_status().attempt == 1 for layout in (first, second))
+    assert main(["run", str(reports)]) == 0
     for layout, old, new in [(first, "3", "5"), (second, "7", "9")]:
         assert layout.load_status().attempt == SECOND_ATTEMPT
         assert (layout.artifacts / "checkpoint.txt").read_text() == new
@@ -124,8 +133,7 @@ def test_reuse_preparation_errors_are_invalid_without_an_execution(tmp_path, mon
     assert main(["retry", "--reuse-artifacts", str(reports)]) == CLI_ERROR
 
     captured = capsys.readouterr()
-    assert "  selected: 0" in captured.out
-    assert "  failed: 0" in captured.out
+    assert "  prepared: 0" in captured.out
     assert "  invalid: 1" in captured.out
     assert "Executing command" not in captured.out
     assert str(layout.root) in captured.err
@@ -154,7 +162,7 @@ def test_reuse_does_not_bypass_selection_or_ownership(tmp_path, capsys, restrict
     assert main(["retry", "--reuse-artifacts", str(layout.root)]) == 0
 
     output = capsys.readouterr().out
-    assert "  selected: 0" in output
+    assert "  prepared: 0" in output
     assert {path: path.read_bytes() for path in paths} == before
     assert not tuple(layout.root.glob("attempt-*"))
 
@@ -177,12 +185,11 @@ def test_force_reuse_still_requires_explicit_paths_and_confirmation(tmp_path, ca
     assert main(["retry", "--force", "--reuse-artifacts", str(layout.root)]) == 0
 
     assert "cannot prove that the previous worker has stopped" in capsys.readouterr().err
+    assert layout.load_status().state == "init"
+    assert layout.load_status().attempt == 1
+    assert (layout.artifacts / "checkpoint.txt").read_text() == "3"
+    assert main(["run", str(layout.root)]) == 0
     assert layout.load_status().attempt == SECOND_ATTEMPT
     assert layout.load_status().state == "completed"
     assert (layout.artifacts / "checkpoint.txt").read_text() == "5"
     assert not layout.claim.exists()
-
-
-def test_artifact_reuse_requires_retry_in_the_shared_api(tmp_path):
-    with pytest.raises(WorkerError, match="Artifact reuse requires retry"):
-        execute_paths(BatchRequest((tmp_path,), reuse_artifacts=True))

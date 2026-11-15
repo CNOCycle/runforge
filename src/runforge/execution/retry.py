@@ -5,16 +5,21 @@ from __future__ import annotations
 import shutil
 import stat
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Literal
 
+from runforge.execution.discovery import discover_paths, is_experiment_boundary
 from runforge.execution.errors import ExperimentHeldError, ExperimentNotRunnableError
-from runforge.execution.scheduling import is_held
+from runforge.execution.scheduling import SchedulingError, is_held
 from runforge.infrastructure.claims import (
     ClaimError,
     ExperimentClaim,
     clear_claim,
     describe_claim_holder,
+    load_claim,
+    release_claim,
     try_acquire_claim,
     verify_claim_owner,
 )
@@ -33,6 +38,7 @@ from runforge.schemas.experiment import ExperimentStatus
 _STATUS_SNAPSHOT_FILE = "status.snapshot.json"
 _ARCHIVED_OUTPUTS = (STDOUT_LOG_FILE, STDERR_LOG_FILE, ARTIFACTS_DIRECTORY)
 _ARTIFACT_SEED = ".artifacts-seed"
+_ClaimIdentity = tuple[int, int, int, str | None]
 
 
 class RetryError(RuntimeError):
@@ -41,6 +47,14 @@ class RetryError(RuntimeError):
 
 class RetryNotRunnableError(RetryError, ExperimentNotRunnableError):
     """An ineligible retry state, usable as a stale selection or retry error."""
+
+
+class _RetryClaimError(RetryError):
+    """Acquisition failed after a possibly completed ownership override."""
+
+    def __init__(self, message: str, *, claim_cleared: bool):
+        super().__init__(message)
+        self.claim_cleared = claim_cleared
 
 
 def is_retryable_state(state: str, *, force: bool = False) -> bool:
@@ -57,6 +71,137 @@ class RetryPreparation:
     previous_status: ExperimentStatus
     status: ExperimentStatus
     forced: bool
+
+
+@dataclass(frozen=True)
+class RetryOutcome:
+    """Preparation or skip/error for one selected experiment."""
+
+    experiment: Path
+    outcome: Literal["prepared", "non-runnable", "held", "claimed", "stale", "invalid"]
+    message: str | None = None
+    forced: bool = False
+
+
+@dataclass(frozen=True)
+class RetryResult:
+    """A fixed preparation batch; success does not assert task execution."""
+
+    outcomes: tuple[RetryOutcome, ...]
+
+    @property
+    def prepared(self) -> int:
+        return sum(item.outcome == "prepared" for item in self.outcomes)
+
+    @property
+    def invalid(self) -> int:
+        return sum(item.outcome == "invalid" for item in self.outcomes)
+
+    @property
+    def skipped(self) -> int:
+        return len(self.outcomes) - self.prepared - self.invalid
+
+    @property
+    def forced(self) -> int:
+        return sum(item.forced for item in self.outcomes)
+
+    @property
+    def exit_code(self) -> int:
+        return 2 if self.invalid else 0
+
+
+def prepare_retries(
+    paths: tuple[Path, ...],
+    *,
+    force: bool = False,
+    reuse_artifacts: bool = False,
+    progress: Callable[[RetryOutcome], None] | None = None,
+) -> RetryResult:
+    """Prepare a discovered selection once without executing experiment commands.
+
+    Successful records are immediately visible to workers after claim release;
+    this is not an atomic publication of the entire batch.
+    """
+    if not paths:
+        raise RetryError("Retry requires explicit experiment or report-root paths")
+    if not isinstance(force, bool) or not isinstance(reuse_artifacts, bool):
+        raise RetryError("force and reuse_artifacts must be booleans")
+    discovery = discover_paths(paths, require_each=True)
+    if force:
+        leaves = {item.path for item in discovery.experiments}
+        # Damaged leaves are target-specific errors; a report root is never a
+        # valid forced selection, even when it contains damaged experiments.
+        leaves.update(item.path for item in discovery.diagnostics if is_experiment_boundary(item.path))
+        if any(Path(path).expanduser().resolve() not in leaves for path in paths):
+            raise RetryError("Forced retry requires explicit experiment-directory paths, not report roots")
+    outcomes = [RetryOutcome(item.path, "invalid", item.message) for item in discovery.diagnostics]
+    for item in outcomes:
+        _report_retry_outcome(progress, item)
+    for item in discovery.experiments:
+        if item.held:
+            outcome = RetryOutcome(item.path, "held", "scheduling hold prevents retry")
+        elif not is_retryable_state(item.status.state, force=force):
+            outcome = RetryOutcome(item.path, "non-runnable", f"state={item.status.state}; not eligible for retry")
+        else:
+            outcome = _prepare_retry_target(
+                ExperimentDirectory(item.path), force=force, reuse_artifacts=reuse_artifacts
+            )
+        outcomes.append(outcome)
+        _report_retry_outcome(progress, outcome)
+    return RetryResult(tuple(outcomes))
+
+
+def _prepare_retry_target(experiment: ExperimentDirectory, *, force: bool, reuse_artifacts: bool) -> RetryOutcome:
+    claim = None
+    overridden = False
+    outcome = RetryOutcome(experiment.root, "invalid", "Preparation interrupted")
+    try:
+        claim, overridden = acquire_retry_claim(experiment, force=force)
+        if claim is None:
+            outcome = RetryOutcome(
+                experiment.root,
+                "claimed",
+                f"Experiment is already claimed ({describe_claim_holder(experiment)}); "
+                "use retry --force only after confirming its worker AND child stopped",
+                forced=overridden,
+            )
+        else:
+            if is_held(experiment):
+                raise ExperimentHeldError("scheduling hold prevents retry")
+            preparation = prepare_retry(experiment.root, force=force, claim=claim, reuse_artifacts=reuse_artifacts)
+            outcome = RetryOutcome(experiment.root, "prepared", forced=preparation.forced or overridden)
+    except ExperimentHeldError as error:
+        outcome = RetryOutcome(experiment.root, "held", str(error), forced=overridden)
+    except RetryNotRunnableError as error:
+        outcome = RetryOutcome(experiment.root, "stale", str(error), forced=overridden)
+    except _RetryClaimError as error:
+        overridden = error.claim_cleared
+        outcome = RetryOutcome(experiment.root, "invalid", str(error), forced=overridden)
+    except (ClaimError, RetryError, SchedulingError, ValueError, OSError) as error:
+        outcome = RetryOutcome(experiment.root, "invalid", str(error), forced=overridden)
+    finally:
+        if claim is not None:
+            try:
+                release_claim(experiment, claim)
+            except ClaimError as error:
+                outcome = RetryOutcome(
+                    experiment.root,
+                    "invalid",
+                    f"{outcome.message or outcome.outcome}; could not release preparation claim: {error}",
+                    forced=outcome.forced,
+                )
+    if overridden and outcome.outcome != "prepared":
+        outcome = replace(outcome, message=f"{outcome.message}; forced retry already cleared the previous claim")
+    return outcome
+
+
+def _report_retry_outcome(progress: Callable[[RetryOutcome], None] | None, outcome: RetryOutcome) -> None:
+    if progress is not None:
+        try:
+            progress(outcome)
+        except Exception:
+            # Progress reporting cannot change preparation outcomes.
+            pass
 
 
 @dataclass
@@ -148,7 +293,7 @@ def _prepare_retry_claim(experiment: ExperimentDirectory, *, force: bool) -> boo
             "use force=True only after confirming its worker stopped"
         )
     try:
-        return _clear_existing_claim(experiment)
+        return _clear_existing_claim(experiment, expected_identity=_claim_identity(experiment))
     except ClaimError as error:
         raise RetryError(str(error)) from error
 
@@ -280,18 +425,43 @@ def _rollback_archive(transaction: _ArchiveTransaction) -> None:
 
 def acquire_retry_claim(experiment: ExperimentDirectory, *, force: bool = False) -> tuple[ExperimentClaim | None, bool]:
     """Validate before an explicit force override, then acquire preparation ownership."""
+    observed_claim = _claim_identity(experiment) if force else None
     _configuration, status = experiment.load_metadata()
     _validate_retry_state(status, force=force)
-    if force and is_held(experiment):
+    if is_held(experiment):
         # A hold written after discovery must not cost the previous owner's claim evidence.
         raise ExperimentHeldError(f"Experiment is held: {experiment.root}")
-    overridden = _clear_existing_claim(experiment) if force else False
-    return try_acquire_claim(experiment), overridden
+    overridden = _clear_existing_claim(experiment, expected_identity=observed_claim) if force else False
+    try:
+        return try_acquire_claim(experiment), overridden
+    except (ClaimError, OSError, ValueError) as error:
+        raise _RetryClaimError(str(error), claim_cleared=overridden) from error
 
 
-def _clear_existing_claim(experiment: ExperimentDirectory) -> bool:
-    """Clear a claim left by a worker the operator confirmed stopped; report whether one existed."""
-    if not experiment.claim.exists():
+def _claim_identity(experiment: ExperimentDirectory) -> _ClaimIdentity | None:
+    """Observe directory identity even when an abandoned claim has unreadable metadata."""
+    try:
+        metadata = experiment.claim.lstat()
+    except FileNotFoundError:
+        return None
+    try:
+        token = load_claim(experiment).token
+    except ClaimError:
+        token = None
+    return metadata.st_dev, metadata.st_ino, metadata.st_ctime_ns, token
+
+
+def _clear_existing_claim(experiment: ExperimentDirectory, *, expected_identity: _ClaimIdentity | None) -> bool:
+    """Refuse a changed owner/state instead of clearing a peer's new claim."""
+    if _claim_identity(experiment) != expected_identity:
+        raise RetryNotRunnableError("Claim changed during forced retry; preserve the new owner and inspect it")
+    if expected_identity is None:
         return False
+    _configuration, status = experiment.load_metadata()
+    _validate_retry_state(status, force=True)
+    if is_held(experiment):
+        raise ExperimentHeldError(f"Experiment is held: {experiment.root}")
+    if _claim_identity(experiment) != expected_identity:
+        raise RetryNotRunnableError("Claim changed during forced retry; preserve the new owner and inspect it")
     clear_claim(experiment)
     return True

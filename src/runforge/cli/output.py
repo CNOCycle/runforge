@@ -13,6 +13,7 @@ from pathlib import Path
 
 from runforge.execution.discovery import DiscoveryResult
 from runforge.execution.onstart import Interrupted
+from runforge.execution.retry import RetryOutcome, RetryResult
 from runforge.execution.staleness import describe_staleness
 from runforge.execution.worker import WorkerProgressEvent, WorkerResult
 from runforge.infrastructure.duration import format_duration
@@ -152,8 +153,8 @@ def print_onstart_warning() -> None:
     )
     print(
         "warning: Use it only on a single machine that has just started, while no other machine works on this "
-        "report root. A forced retry of an experiment that is still running starts it a second time, and RunForge "
-        "cannot detect that.",
+        "report root. Preparing an experiment that is still running can race its old worker and child; RunForge "
+        "cannot prove they stopped.",
         file=sys.stderr,
     )
     print(
@@ -193,6 +194,32 @@ def print_worker_summary(result: WorkerResult, *, label: str = "Worker") -> None
     _worker_print(f"    held: {result.held}")
     _worker_print(f"  deferred: {result.deferred}")
     _worker_print(f"  invalid: {result.invalid}")
+
+
+def print_retry_outcome(outcome: RetryOutcome) -> None:
+    """Report preparation separately from command execution."""
+    if outcome.forced:
+        _worker_print(
+            f"warning: Forced retry cannot prove that the previous worker has stopped: {outcome.experiment}",
+            file=sys.stderr,
+        )
+    if outcome.outcome == "prepared":
+        _worker_print(f"Prepared for run: {outcome.experiment}")
+    elif outcome.outcome == "invalid":
+        _worker_print(f"error: {outcome.message}: {outcome.experiment}", file=sys.stderr)
+    else:
+        _worker_print(f"Skipped ({outcome.outcome}): {outcome.experiment}: {outcome.message}")
+
+
+def print_retry_summary(result: RetryResult) -> None:
+    """Success counts preparations, never completed experiment commands."""
+    _worker_print("Retry preparation summary:")
+    _worker_print(f"  prepared: {result.prepared}")
+    _worker_print(f"  skipped: {result.skipped}")
+    for reason in ("non-runnable", "held", "claimed", "stale"):
+        _worker_print(f"    {reason}: {sum(item.outcome == reason for item in result.outcomes)}")
+    _worker_print(f"  invalid: {result.invalid}")
+    _worker_print(f"  force overrides: {result.forced}")
 
 
 def print_worker_progress(event: WorkerProgressEvent) -> None:

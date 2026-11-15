@@ -7,7 +7,6 @@ import sys
 import warnings
 from collections.abc import Callable
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import TypeVar
 
 from runforge.cli.output import (
@@ -21,18 +20,18 @@ from runforge.cli.output import (
     print_onstart_plan,
     print_onstart_warning,
     print_planning_arguments,
+    print_retry_outcome,
+    print_retry_summary,
     print_worker_progress,
     print_worker_summary,
 )
 from runforge.cli.requests import matrix_request, planning_request
 from runforge.execution.discovery import DiscoveryError, discover_paths
-from runforge.execution.errors import WorkerError
 from runforge.execution.onstart import ReportRootLock, find_interrupted
 from runforge.execution.path_patterns import expand_path_arguments
-from runforge.execution.retry import RetryError
+from runforge.execution.retry import RetryError, prepare_retries
 from runforge.execution.scheduling import SchedulingError, set_hold
 from runforge.execution.worker import BatchRequest, execute_paths
-from runforge.infrastructure.claims import ClaimError
 from runforge.planning.matrix_mapping import build_matrix_mapping, save_matrix_mapping
 from runforge.planning.planner import plan_experiment, plan_matrix
 
@@ -46,22 +45,30 @@ def run(arguments: argparse.Namespace) -> int:
         ("paths", ", ".join(path_text(path) for path in arguments.paths)),
         ("stream output", "enabled" if arguments.stream_output else "disabled"),
     ]
-    if arguments.retry:
-        rows.append(("force", "enabled" if arguments.force else "disabled"))
-        rows.append(("reuse artifacts", "enabled" if arguments.reuse_artifacts else "disabled"))
-    else:
-        rows.append(("max tasks", str(arguments.max_tasks) if arguments.max_tasks else "unlimited"))
+    rows.append(("max tasks", str(arguments.max_tasks) if arguments.max_tasks else "unlimited"))
     print_effective_arguments(arguments.command_name, rows)
     return _execute_and_summarize(
-        BatchRequest(
-            expand_path_arguments(tuple(arguments.paths)),
-            arguments.max_tasks,
-            arguments.stream_output,
-            retry=arguments.retry,
-            force=arguments.force,
-            reuse_artifacts=arguments.reuse_artifacts,
-        )
+        BatchRequest(expand_path_arguments(tuple(arguments.paths)), arguments.max_tasks, arguments.stream_output)
     )
+
+
+def retry(arguments: argparse.Namespace) -> int:
+    print_effective_arguments(
+        "retry",
+        [
+            ("paths", ", ".join(path_text(path) for path in arguments.paths)),
+            ("force", "enabled" if arguments.force else "disabled"),
+            ("reuse artifacts", "enabled" if arguments.reuse_artifacts else "disabled"),
+        ],
+    )
+    result = prepare_retries(
+        expand_path_arguments(tuple(arguments.paths)),
+        force=arguments.force,
+        reuse_artifacts=arguments.reuse_artifacts,
+        progress=print_retry_outcome,
+    )
+    print_retry_summary(result)
+    return result.exit_code
 
 
 def _execute_and_summarize(request: BatchRequest, *, label: str = "Execution") -> int:
@@ -93,25 +100,21 @@ def onstart(arguments: argparse.Namespace) -> int:
         found = find_interrupted(root)
         print_onstart_plan(root, found)
         exit_code = 0
-        for experiment in found.restart:
-            exit_code = max(exit_code, _restart_interrupted(experiment, arguments.stream_output))
+        if found.restart:
+            try:
+                recovery = prepare_retries(
+                    found.restart, force=True, reuse_artifacts=True, progress=print_retry_outcome
+                )
+                print_retry_summary(recovery)
+                exit_code = recovery.exit_code
+            except (DiscoveryError, RetryError) as error:
+                print(f"error: {error}", file=sys.stderr)
+                exit_code = 2
         exit_code = max(exit_code, _execute_and_summarize(BatchRequest((root,), None, arguments.stream_output)))
         if found.held or found.unstarted_claimed:
             print("Left unchanged:")
             print_onstart_left_unchanged(found)
         return exit_code
-
-
-def _restart_interrupted(experiment: Path, stream_output: bool) -> int:
-    """Force-retry one experiment with its artifacts restored; a failure is reported, never repeated."""
-    try:
-        return _execute_and_summarize(
-            BatchRequest((experiment,), None, stream_output, retry=True, force=True, reuse_artifacts=True),
-            label="Recovery",
-        )
-    except (ClaimError, RetryError, WorkerError) as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 2
 
 
 def matrix(arguments: argparse.Namespace) -> int:

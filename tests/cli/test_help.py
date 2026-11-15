@@ -30,7 +30,7 @@ def test_version_flags_need_no_subcommand(capsys):
         with pytest.raises(SystemExit) as raised:
             main([flag])
         assert raised.value.code == 0
-        assert capsys.readouterr().out.startswith("runforge 0.4.0+")
+        assert capsys.readouterr().out.startswith("runforge 0.5.0+")
 
 
 def test_plan_help_preserves_source_input_and_command_contract(capsys):
@@ -53,7 +53,7 @@ def test_plan_help_preserves_source_input_and_command_contract(capsys):
     assert "(default: False)" not in output
 
 
-@pytest.mark.parametrize("leaf", ["launch", "run", "retry"])
+@pytest.mark.parametrize("leaf", ["launch", "run"])
 def test_streaming_alias_and_default(leaf, capsys):
     output = _single_line(_help(capsys, leaf))
     assert "stream stdout and stderr while preserving log files (default: disabled)" in output
@@ -135,7 +135,26 @@ def test_readonly_and_control_commands_reject_streaming(leaf, capsys):
     assert raised.value.code == CLI_ERROR_EXIT
 
 
-@pytest.mark.parametrize("leaf", ["launch", "run", "retry"])
+@pytest.mark.parametrize("leaf", ["launch", "run"])
 def test_execution_help_describes_the_in_experiment_workdir(leaf, capsys):
     output = _single_line(_help(capsys, leaf))
     assert ".workspace directory inside each experiment" in output
+
+
+@pytest.mark.parametrize("flag", ["-s", "--stream-output"])
+def test_retry_rejects_execution_options_and_explains_preparation(flag, capsys):
+    output = _single_line(_help(capsys, "retry"))
+    assert "without executing" in output or "without executing" in _single_line(_help(capsys))
+    assert "Success means preparation, not task completion" in output
+    assert "--reuse-artifacts" in output
+    assert "--force" in output
+    with pytest.raises(SystemExit) as raised:
+        main(["retry", flag, "experiment"])
+    assert raised.value.code == CLI_ERROR_EXIT
+
+
+@pytest.mark.parametrize("flag", ["--force", "--reuse-artifacts"])
+def test_run_rejects_recovery_options(flag):
+    with pytest.raises(SystemExit) as raised:
+        main(["run", flag, "experiment"])
+    assert raised.value.code == CLI_ERROR_EXIT

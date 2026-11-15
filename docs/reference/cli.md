@@ -12,7 +12,7 @@ Priority controls are deferred.
 | plan [--matrix FILE] | Publish one plan or a matrix; never execute. | 0, or 2 on error |
 | launch | Publish and execute exactly one new plan. | Aggregate 0/1/2 |
 | run PATH... | Execute eligible experiment leaves beneath explicit paths or patterns. | Aggregate 0/1/2 |
-| retry PATH... | Archive and retry failed selected plans. | Aggregate 0/1/2 |
+| retry PATH... | Archive and prepare selected plans for run; never execute. | 0, or 2 on error |
 | onstart --single-node PATH | Entry point for an interruptible machine: restart interrupted experiments, then run the rest. | Aggregate 0/1/2 |
 | discover [PATH...] | Union/deduplicate read-only experiment discovery. | 0, or 2 on invalid metadata |
 | mapping ARTIFACT | Read a saved matrix mapping. | 0, or 2 on error |
@@ -58,7 +58,7 @@ validation rules are defined in [source modes](source-modes.md) and
 Everything after -- belongs to the child, including words matching RunForge
 command names. It is an argv array unless --shell explicitly selects one quoted
 script. Place planning options before --. No implicit shell execution is added.
-Only launch, run, and retry expose -s/--stream-output, preserving
+Only launch, run, and onstart expose -s/--stream-output, preserving
 stdout.log and stderr.log as well as optional console mirroring. run and retry
 also accept report-root paths, which select the experiments beneath them.
 
@@ -112,8 +112,9 @@ an attempted command failed; 2 means invalid metadata or a CLI/domain error.
 Invalid metadata takes precedence over failure. Detailed child codes are stored
 in status.json. Completed work is not rerun and retries are explicit.
 
-launch/run/retry all use the aggregate contract. run/retry require explicit
-paths or patterns; an empty or missing input path is an error before any execution.
+launch/run/onstart use the aggregate execution contract. Retry returns 0 for
+preparation or skips, and 2 for errors; it never returns a child failure code.
+Run/retry require explicit paths or patterns; an empty or missing input path is an error before any execution.
 Paths are unioned and deduplicated. Force retry requires every path, after any
 pattern is expanded, to be an experiment directory; bulk forced root recovery is
 refused.
@@ -123,15 +124,50 @@ on experiment start time. They do not recover tasks or remove claims. -f/--force
 is only an operator-confirmed retry override after independently checking that
 prior worker/child processes stopped; it cannot prove abandonment.
 
-retry --reuse-artifacts copies the immediately preceding attempt's entire
-artifact tree into the current artifact directory after archiving the original.
-It is disabled by default; normal retry starts with empty artifacts. The recorded
-command must already support checkpoint recovery. Copies are independent of the
-archive, current logs are fresh, and symbolic links/special files are rejected.
-Root selection reuses each eligible failed experiment's own artifacts. Combining
-it with --force still requires experiment directories (explicit or from a pattern)
-and confirmation that prior workers and children stopped. See the [checkpoint recovery guide](../guides/workers-and-recovery.md#reuse-artifacts-for-application-checkpoint-recovery)
-for costs, limitations, and interrupted preparation.
+## Retry preparation
+
+`retry` queues another attempt without executing the recorded command. This is a
+CLI behavior change: replace scripts that expected immediate execution with
+retry, inspection of its result, and an explicit run. Retry rejects
+`-s/--stream-output`; place streaming and completion quotas on run instead.
+
+| Retry options | Eligibility | Prepared artifacts |
+| --- | --- | --- |
+| Neither | Failed, unclaimed | Empty |
+| --reuse-artifacts | Failed, unclaimed | Independent copy of previous artifacts |
+| --force | Failed or inprogress, after confirming old execution stopped | Empty |
+| --force --reuse-artifacts | Same force rules | Independent copy of previous artifacts |
+
+Force may clear an abandoned claim on failed or inprogress work. It cannot stop
+an old process, override a hold, repair invalid metadata, or rerun completed work.
+Created/init work, including claimed records, is skipped without clearing its
+claim; use run or inspect ownership. Repeating retry on prepared init work
+preserves its artifacts and archives even when different flags are passed.
+
+Preparation claims one experiment, rereads eligibility and holds, archives its
+previous status/logs/artifacts, builds the new artifact tree, and publishes init
+last. It does not increment the attempt count or change immutable configuration.
+It then releases its own claim. Run claims that prepared experiment separately
+and increments its attempt when the command starts, with no force/reuse flags.
+
+Reuse copies the immediately preceding attempt's entire artifact tree; current
+logs are fresh when execution starts. Copies are independent of the archive;
+regular files/directories are supported, symlinks/special files are rejected,
+and a missing artifact directory is an error. The application must already know
+how to load its checkpoints. No copying failure falls back to empty artifacts.
+
+Retry discovers a fixed selection once, deduplicates it, and never refills or
+waits for task execution. It reports prepared, skipped with reasons, invalid,
+and actual force overrides. Earlier successes remain queued if later targets
+fail. Exit 0 includes all-skipped selections and says nothing about task success;
+exit 2 requires inspecting per-target results. A forced failure may already have
+cleared the previous claim even when output rollback succeeds.
+
+Publication is per experiment: another worker can consume a prepared record as
+soon as its claim is released, before the batch finishes. There is no node
+reservation or whole-batch publication barrier. See the
+[cluster handoff workflow](../guides/workers-and-recovery.md#bulk-recovery-and-cluster-handoff)
+and [checkpoint recovery guide](../guides/workers-and-recovery.md#reuse-artifacts-for-application-checkpoint-recovery).
 
 ## onstart
 
@@ -147,18 +183,18 @@ not a daemon; it returns when the work is done.
 
 It does two things, in order:
 
-1. Restarts every experiment under the report root that an interruption left
-   `inprogress`, as `retry --force --reuse-artifacts` would.
-2. Processes the remaining plans exactly as `run` does.
+1. Prepares all eligible interrupted `inprogress` experiments with force and
+   artifact reuse, as `retry --force --reuse-artifacts` would, without execution.
+2. Runs the report root once through ordinary execution, consuming prepared and
+   other runnable plans in path order. Recovery has no special execution priority.
 
 **Warning: your program must be resumable.** RunForge restarts the recorded
 command as a new attempt and copies the previous attempt's artifacts back to
 `RUNFORGE_ARTIFACT_DIR`. It does not resume the process: a program that does not
 load its own checkpoint from that directory starts over.
 
-**Warning: one machine only.** The restarts are forced. A forced retry of an
-experiment that is still running starts it a second time, and RunForge cannot
-detect that. Use `onstart` only on a single machine that has just started, while
+**Warning: one machine only.** The restarts are forced. Preparing work that is still running can race the old worker and child;
+RunForge cannot prove they stopped. Use `onstart` only on a single machine that has just started, while
 no other machine works on the report root. Every invocation prints this warning,
 and without `--single-node` the command stops with exit 2 having changed nothing.
 On a cluster or a shared report root, use `run` and a manual `retry`
@@ -195,7 +231,7 @@ Behavior to know:
   and listed in the same way, because a forced retry does not clear them. Failed
   experiments are not retried.
 - The exit code is 0 when every step exited 0, otherwise the largest exit code
-  among the restarts and the final run.
+  from preparation and the final run.
 
 ## Environment and output
 
@@ -216,11 +252,12 @@ artifact reuse.
 Progress, logs, summaries, matrix tables, and
 warnings remain human-readable; no machine-readable output protocol is added.
 
-Before execution, run/retry/launch assess inprogress or claimed experiments from
+Before execution, run/launch assess inprogress or claimed experiments from
 their initial selection as active, stale, or unknown. Active claims (a running
 local PID that started before the claim) are not reported. Stale and unknown
 records are reported with recorded ownership, process evidence, any workdir
 present in the experiment, and manual recovery commands. Inspection is read-only
 and does not change selection, exit accounting, or claims. Unrelated runnable
-work continues. The check reuses discovery for affected records. See the
+work continues. The check reuses discovery for affected records. Retry instead reports preparation
+and skip outcomes, including the owner and force guidance for claimed work. See the
 [pre-start recovery workflow](../guides/workers-and-recovery.md#before-starting-again-after-a-restart).

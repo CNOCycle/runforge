@@ -54,15 +54,12 @@ def _existing(layout, *, state="inprogress", owner="prior-container:42"):
     return claim
 
 
-@pytest.mark.parametrize("command", ["run", "retry"])
-def test_startup_reports_interrupted_work_and_continues_other_experiments(tmp_path, monkeypatch, capsys, command):
+def test_startup_reports_interrupted_work_and_continues_other_experiments(tmp_path, monkeypatch, capsys):
     repository = create_git_repository(tmp_path / "repository", {"train.py": "print('done')\n"})
     reports = tmp_path / "reports"
     stopped = ExperimentDirectory(_plan(repository, reports, "a-stopped"))
     following = ExperimentDirectory(_plan(repository, reports, "b-following"))
     _existing(stopped)
-    if command == "retry":
-        following.save_status(replace(following.load_status(), state="failed", attempt=1))
     before = {path.name: path.read_bytes() for path in (stopped.status_file, stopped.claim_file)}
     phases = []
     progress = commands.print_worker_progress
@@ -73,7 +70,7 @@ def test_startup_reports_interrupted_work_and_continues_other_experiments(tmp_pa
 
     monkeypatch.setattr(commands, "print_worker_progress", record)
 
-    assert main([command, str(reports)]) == 0
+    assert main(["run", str(reports)]) == 0
 
     output = capsys.readouterr()
     assert f"after confirmation: runforge retry --force {stopped.root}" in output.err
@@ -98,7 +95,7 @@ def test_forced_retry_does_not_repeat_the_guidance_to_run_the_forced_retry(tmp_p
     error = capsys.readouterr().err
     assert "after confirmation: runforge retry --force" not in error
     assert "Forced retry cannot prove that the previous worker has stopped" in error
-    assert stopped.load_status().state == "completed"
+    assert stopped.load_status().state == "init"
 
 
 def test_forced_retry_reports_a_cleared_claim_that_another_worker_took_first(tmp_path, monkeypatch, capsys):
@@ -109,68 +106,71 @@ def test_forced_retry_reports_a_cleared_claim_that_another_worker_took_first(tmp
 
     main(["retry", "--force", str(stopped.root)])
 
-    assert "another worker acquired the experiment first" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert "already cleared the previous claim" in captured.out + captured.err
     assert stopped.load_status().state == "inprogress"
 
 
 INVALID_EXIT_CODE = 2
-HOLD_VICTIM_SCRIPT = """\
-import json, os, pathlib
-victim = pathlib.Path(pathlib.Path(VICTIM_FILE).read_text().strip())
-if pathlib.Path(os.environ["RUNFORGE_ARTIFACT_DIR"]).parent != victim:
-    (victim / "schedule.json").write_text(json.dumps(
-        {"kind": "runforge_schedule", "schema_version": 1, "held": True, "updated_at": "2026-11-10T00:00:00Z"}))
-"""
 
 
-def test_forced_retry_keeps_the_claim_of_an_experiment_held_after_discovery(tmp_path, capsys):
-    # The runner's command writes the hold while the batch is already running, after discovery built its queue.
-    repository = create_git_repository(
-        tmp_path / "repository",
-        {"train.py": HOLD_VICTIM_SCRIPT.replace("VICTIM_FILE", repr(str(tmp_path / "victim.txt")))},
-    )
+def test_forced_retry_keeps_the_claim_of_an_experiment_held_after_discovery(tmp_path, monkeypatch, capsys):
+    repository = create_git_repository(tmp_path / "repository", {"train.py": "print('must not execute')\n"})
     reports = tmp_path / "reports"
     first = ExperimentDirectory(_plan(repository, reports, "a-first"))
     second = ExperimentDirectory(_plan(repository, reports, "b-second"))
     runner, victim = sorted((first, second), key=lambda layout: layout.root)
-    (tmp_path / "victim.txt").write_text(str(victim.root), encoding="utf-8")
     runner.save_status(replace(runner.load_status(), state="failed", attempt=1))
     _existing(victim)
     before = (victim.status_file.read_bytes(), victim.claim_file.read_bytes())
+    print_outcome = commands.print_retry_outcome
 
-    main(["retry", "--force", str(runner.root), str(victim.root)])
+    def hold_after_first_prepared(outcome):
+        print_outcome(outcome)
+        if outcome.experiment == runner.root:
+            save_json_object(
+                victim.schedule_file,
+                {
+                    "kind": "runforge_schedule",
+                    "schema_version": 1,
+                    "held": True,
+                    "updated_at": "2026-11-15T00:00:00Z",
+                },
+            )
+
+    monkeypatch.setattr(commands, "print_retry_outcome", hold_after_first_prepared)
+    assert main(["retry", "--force", str(runner.root), str(victim.root)]) == 0
 
     capsys.readouterr()
-    assert runner.load_status().state == "completed"
+    assert runner.load_status().state == "init"
     assert victim.claim_file.exists()
     assert (victim.status_file.read_bytes(), victim.claim_file.read_bytes()) == before
     assert not list(victim.root.glob("attempt-*"))
 
 
-def test_malformed_hold_written_after_discovery_invalidates_only_that_candidate(tmp_path, capsys):
-    hold = HOLD_VICTIM_SCRIPT[HOLD_VICTIM_SCRIPT.index("    (victim"):]
-    script = HOLD_VICTIM_SCRIPT.replace(hold, '    (victim / "schedule.json").write_text("{broken JSON")\n')
-    assert script != HOLD_VICTIM_SCRIPT
-    repository = create_git_repository(
-        tmp_path / "repository",
-        {"train.py": script.replace("VICTIM_FILE", repr(str(tmp_path / "victim.txt")))},
-    )
+def test_malformed_hold_written_after_discovery_invalidates_only_that_candidate(tmp_path, monkeypatch, capsys):
+    repository = create_git_repository(tmp_path / "repository", {"train.py": "print('must not execute')\n"})
     reports = tmp_path / "reports"
     first = ExperimentDirectory(_plan(repository, reports, "a-first"))
-    second = ExperimentDirectory(_plan(repository, reports, "b-second"))
+    victim = ExperimentDirectory(_plan(repository, reports, "b-second"))
     third = ExperimentDirectory(_plan(repository, reports, "c-third"))
-    victim = second
-    (tmp_path / "victim.txt").write_text(str(victim.root), encoding="utf-8")
     for layout in (first, third):
         layout.save_status(replace(layout.load_status(), state="failed", attempt=1))
     _existing(victim)
+    print_outcome = commands.print_retry_outcome
 
+    def corrupt_after_first_prepared(outcome):
+        print_outcome(outcome)
+        if outcome.experiment == first.root:
+            victim.schedule_file.write_text("{broken JSON")
+
+    monkeypatch.setattr(commands, "print_retry_outcome", corrupt_after_first_prepared)
     exit_code = main(["retry", "--force", str(first.root), str(victim.root), str(third.root)])
 
     capsys.readouterr()
     assert exit_code == INVALID_EXIT_CODE
-    assert first.load_status().state == "completed"
-    assert third.load_status().state == "completed"
+    assert first.load_status().state == "init"
+    assert third.load_status().state == "init"
     assert victim.claim_file.exists()
 
 
@@ -427,12 +427,16 @@ def test_killed_worker_is_identified_and_force_retry_starts_new_attempt(tmp_path
 
     assert main(["retry", "--force", str(layout.root)]) == 0
     capsys.readouterr()
+    assert layout.load_status().state == "init"
+    assert layout.load_status().attempt == 1
+    assert workspace.exists()  # Preparation does not build or remove execution workdirs.
+    assert main(["run", str(layout.root)]) == 0
     assert layout.load_status().state == "completed"
     assert layout.load_status().attempt == SECOND_ATTEMPT
     snapshot = load_json_object(layout.root / "attempt-0001" / "status.snapshot.json")
     assert snapshot["state"] == "inprogress"
     assert not layout.claim.exists()
-    # The retry deleted the killed run's workdir, built a fresh one, and removed it.
+    # The subsequent run replaced the killed run's workdir and removed it.
     assert not workspace.exists()
     assert "recovered" in layout.stdout_log.read_text()
 

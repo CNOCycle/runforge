@@ -131,7 +131,7 @@ runforge launch \
 ```
 
 `launch` prints the created experiment directory before execution and uses the
-same aggregate 0/1/2 result as run and retry. The standalone `plan` and `run` commands
+same aggregate 0/1/2 result as run. The standalone `plan` and `run` commands
 remain available when planning and execution need to happen at different times
 or on different machines.
 
@@ -150,7 +150,7 @@ runforge run --stream-output "$REPO/reports/main/01234567_baseline_0000"
 
 RunForge forwards output as the command emits it. Programs that buffer their
 own output must flush it or enable their own unbuffered mode for timely display.
-Regardless of streaming mode, `run`, `launch`, and `retry` print
+Regardless of streaming mode, `run`, `launch`, and `onstart` print
 flushed preparation, execution, and final success or failure messages so
 a quiet child process is distinguishable from a stalled CLI. In log-only mode,
 the lifecycle messages also identify the active `stdout.log` and `stderr.log`
@@ -163,20 +163,31 @@ After a container restart or killed worker, start with the
 It explains how to identify interrupted experiments, confirm that the old
 execution stopped, and retry the same plan.
 
-Start another attempt of the same immutable configuration, archiving the
-previous one under `attempt-NNNN/`:
+Prepare another attempt of the same immutable configuration, archiving the
+previous one under `attempt-NNNN/`. Retry does not execute the task:
 
 ```bash
 runforge retry "$REPORT_ROOT/main/01234567_baseline_0000"
 ```
 
-Ordinary retry starts with an empty artifact directory. If the recorded command
+Ordinary retry prepares an empty artifact directory. If the recorded command
 already resumes from checkpoints in that directory, copy the previous artifacts
-into the new attempt with:
+into the prepared attempt with:
 
 ```bash
 runforge retry --reuse-artifacts "$REPORT_ROOT/main/01234567_baseline_0000"
 ```
+
+After checking that preparation succeeded, execute it on the worker machine:
+
+```bash
+runforge run --stream-output "$REPORT_ROOT/main/01234567_baseline_0000"
+```
+
+Retry now queues work without execution; scripts that previously relied on it
+running the task must invoke run explicitly. Retry returns 0 for preparations or
+skips, and 2 for errors; run reports the execution result. `--stream-output`
+belongs on run. A prepared task is immediately available to existing workers.
 
 The previous attempt remains an independent archive. Reuse copies the entire
 artifact tree, so allow extra disk space and copy time; it does not enable resume
