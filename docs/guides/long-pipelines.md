@@ -195,8 +195,8 @@ step never runs on incomplete output. RunForge records the wrapper's exit code
 in `status.json`, marks the experiment `failed`, and keeps the logs and partial
 artifacts for diagnosis.
 
-After fixing the cause, retry starts a fresh attempt of the same recorded
-pipeline. It does not resume a partially finished pipeline, so a wrapper that
+After fixing the cause, retry prepares another attempt without executing it;
+use run after checking preparation results to execute the same recorded pipeline. It does not resume a partially finished pipeline, so a wrapper that
 should skip completed stages must implement that behavior itself, usually by
 checking its own outputs under `RUNFORGE_ARTIFACT_DIR`.
 

@@ -9,14 +9,17 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from runforge.cli import commands, main
 from runforge.execution.onstart import Interrupted
-from runforge.execution.retry import RetryError
+from runforge.execution.retry import RetryError, RetryOutcome, RetryResult
 from runforge.execution.worker import WorkerResult
+from runforge.infrastructure.claims import try_acquire_claim
+from runforge.infrastructure.storage import ExperimentDirectory
 from tests.support import planned_path
 
 
@@ -248,26 +251,36 @@ def test_a_restart_that_cannot_be_prepared_is_reported_once_and_changes_no_attem
     assert not (experiment / "claim").exists()  # the forced retry had already cleared the old claim
 
 
-def test_a_failed_restart_is_reported_and_not_repeated_without_artifacts(tmp_path, monkeypatch):
+def test_preparation_failure_is_not_repeated_and_execution_still_runs(tmp_path, monkeypatch):
     calls = []
+    experiment = tmp_path / "interrupted"
+    monkeypatch.setattr(commands, "find_interrupted", lambda root: Interrupted((experiment,), (), ()))
+
+    def prepare(paths, **options):
+        calls.append(("prepare", paths, options["force"], options["reuse_artifacts"]))
+        return RetryResult((RetryOutcome(experiment, "invalid", "copy failure"),))
 
     def execute(request, *, progress=None):
-        calls.append((request.retry, request.force, request.reuse_artifacts))
-        return _result(invalid=1)
+        calls.append(("execute", request.paths))
+        return _result()
 
+    monkeypatch.setattr(commands, "prepare_retries", prepare)
     monkeypatch.setattr(commands, "execute_paths", execute)
 
-    assert commands._restart_interrupted(tmp_path, False) == CLI_ERROR_EXIT  # noqa: SLF001
-    assert calls == [(True, True, True)]
+    assert main(["onstart", "--single-node", str(tmp_path)]) == CLI_ERROR_EXIT
+    assert calls == [("prepare", (experiment,), True, True), ("execute", (tmp_path,))]
 
 
 def test_a_retry_error_is_reported_without_stopping_the_command(tmp_path, monkeypatch, capsys):
-    def execute(request, *, progress=None):
+    monkeypatch.setattr(commands, "find_interrupted", lambda root: Interrupted((tmp_path / "interrupted",), (), ()))
+
+    def prepare(*_args, **_options):
         raise RetryError("Could not prepare retry; rollback also failed: inspect the files")
 
-    monkeypatch.setattr(commands, "execute_paths", execute)
+    monkeypatch.setattr(commands, "prepare_retries", prepare)
+    monkeypatch.setattr(commands, "execute_paths", lambda *_args, **_options: _result())
 
-    assert commands._restart_interrupted(tmp_path, False) == CLI_ERROR_EXIT  # noqa: SLF001
+    assert main(["onstart", "--single-node", str(tmp_path)]) == CLI_ERROR_EXIT
     assert "rollback also failed" in capsys.readouterr().err
 
 
@@ -290,4 +303,42 @@ def test_a_held_interrupted_experiment_is_not_restarted_and_is_listed_before_and
         == LISTED_TWICE
     )
     assert "Left unchanged:" in output
-    assert [request.retry for request in requests] == [False]  # only the final run; nothing was force-retried
+    assert [request.paths for request in requests] == [(tmp_path,)]  # only ordinary execution
+
+
+@pytest.mark.parametrize("broken_seed", [False, True])
+def test_all_recovery_preparations_finish_before_execution(machine, monkeypatch, broken_seed):
+    machine.marker.touch()
+    layouts = [ExperimentDirectory(machine.plan()) for _ in range(2)]
+    for layout in layouts:
+        layout.save_status(
+            replace(layout.load_status(), state="inprogress", attempt=1, started_at="2026-01-01T00:00:00Z")
+        )
+        (layout.artifacts / "checkpoint.txt").write_text("step-1")
+        assert try_acquire_claim(layout, owner="confirmed-stopped-worker") is not None
+    if broken_seed:
+        (layouts[0].artifacts / "link").symlink_to(layouts[0].artifacts / "checkpoint.txt")
+    execute = commands.execute_paths
+    observed = []
+
+    def execute_prepared_queue(request, *, progress=None):
+        states = [layout.load_status().state for layout in layouts]
+        assert states == (["inprogress", "init"] if broken_seed else ["init", "init"])
+        assert all(layout.load_status().attempt == 1 for layout in layouts)
+        assert all(not (layout.artifacts / "result.txt").exists() for layout in layouts)
+        observed.append(request.paths)
+        return execute(request, progress=progress)
+
+    monkeypatch.setattr(commands, "execute_paths", execute_prepared_queue)
+
+    assert main(["onstart", "--single-node", str(machine.reports)]) == (CLI_ERROR_EXIT if broken_seed else 0)
+    assert observed == [(machine.reports,)]
+    for index, layout in enumerate(layouts):
+        if broken_seed and index == 0:
+            assert layout.load_status().state == "inprogress"
+            assert layout.load_status().attempt == 1
+            assert not (layout.root / "attempt-0001").exists()
+        else:
+            assert layout.load_status().state == "completed"
+            assert layout.load_status().attempt == SECOND_ATTEMPT
+            assert (layout.artifacts / "result.txt").read_text().strip() == "resumed"

@@ -81,5 +81,6 @@ def _action_lines(item, claim, liveness) -> list[str]:
         lines.append(f"  Its recorded PID is running: check it with 'ps -o lstart= -p {pid}' before any forced retry.")
     else:
         lines.append(f"  after confirmation: runforge retry --force {shlex.quote(str(item.path))}")
-    lines.append("  Retry starts a new attempt; it does not resume the old process or workdir.")
+    lines.append("  Retry prepares another attempt without executing; use runforge run on it afterward.")
+    lines.append("  Execution does not resume the old process or workdir.")
     return lines

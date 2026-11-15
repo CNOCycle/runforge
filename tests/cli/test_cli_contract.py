@@ -207,8 +207,7 @@ def test_force_retry_rejects_an_unusable_claim_without_counting_an_execution_fai
 
     captured = capsys.readouterr()
     assert "Claim path is not a directory" in captured.err
-    assert "  selected: 0" in captured.out
-    assert "  failed: 0" in captured.out
+    assert "  prepared: 0" in captured.out
     assert "  invalid: 1" in captured.out
     assert (experiment / "status.json").read_bytes() == before
     assert (experiment / "stdout.log").read_bytes() == output
@@ -230,13 +229,11 @@ def test_retry_claim_contention_keeps_history_and_guides_root_and_explicit_targe
     assert main(["retry", str(target)]) == 0
 
     captured = capsys.readouterr()
-    assert "claim contention: 1" in captured.out
-    assert "  selected: 0" in captured.out
-    assert "Existing execution: state=failed" in captured.err
-    assert "node7:123" in captured.err
-    assert "--force" in captured.err
-    if explicit:
-        assert "confirming" in captured.err
+    assert "    claimed: 1" in captured.out
+    assert "  prepared: 0" in captured.out
+    assert "node7:123" in captured.out
+    assert "--force" in captured.out
+    assert "confirming" in captured.out
     assert layout.status_file.read_bytes() == status
     assert layout.claim_file.read_bytes() == claim
     assert not list(experiment.glob("attempt-*"))

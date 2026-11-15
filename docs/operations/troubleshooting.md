@@ -9,7 +9,8 @@ holder and when it was acquired.
 
 Confirm that both the worker and its child process have stopped before using
 `runforge retry --force EXPERIMENT_DIR` on a failed or `inprogress` experiment.
-Forced retry does not clear a claim on a `created` or `init` experiment; preserve
+Retry only prepares work; inspect its result, then invoke `runforge run EXPERIMENT_DIR`
+to execute. Forced retry does not clear a claim on a `created` or `init` experiment; preserve
 that record and investigate the claim. See the
 [recovery workflow](../guides/workers-and-recovery.md#restart-confirmed-interrupted-experiments)
 and, for scheduler or container owners, [Slurm and containers](slurm-and-containers.md).
@@ -22,7 +23,7 @@ an interrupted run on its own; recovery starts only when you run a command. See
 To list candidates, run `runforge discover --older-than 6h PATH` (or
 `--started-before TIME`); it adds a `stale:` line under each `inprogress`
 experiment started before the cutoff. That is a hint only and prints no retry
-command. When you start `runforge run` or `runforge retry` on a report root, it
+command. When you start `runforge run` on a report root, it
 first prints a recovery note for each `inprogress` or claimed experiment whose
 worker is stale or cannot be verified, then goes on to run the other eligible
 experiments. Printing the notes leaves those experiments unchanged. A note shows
@@ -30,7 +31,8 @@ the recorded owner and an assessment (stale or unknown) and then, by evidence:
 the `runforge retry --force` command when a force retry applies; a `ps` check
 instead when the recorded PID is still running; or, for a `created` or `init`
 claim, that it cannot be force-retried and needs inspection. A claim verified as
-active gets no note.
+active gets no note. Retry reports preparation and skip outcomes, including
+claim owners and force guidance for claimed failed work, without executing it.
 
 - Use `retry --force` only after confirming both worker and child have stopped.
   Add `--reuse-artifacts` to copy the previous artifacts back for a program that
@@ -86,9 +88,9 @@ permissions on the report root.
 Normal execution removes the temporary `.workspace/` inside the experiment after
 each command, including ordinary command failures. An abrupt kill, crash, or
 cleanup error can leave it behind. Its contents do not provide process resume
-or reattachment. The next execution of that experiment, normally
-`runforge retry --force` after confirming the worker and child stopped, deletes
-it and builds a fresh one, so copy out anything you need first. A leftover Git
+or reattachment. After confirming the worker and child stopped, prepare it with
+`runforge retry --force`, then execute with `runforge run`. That execution deletes
+the leftover workdir and builds a fresh one, so copy out anything you need first. A leftover Git
 worktree you locked with `git worktree lock` is never deleted: execution fails
 until you unlock it. Host/PID/owner
 records and age alone are not proof that the process stopped. See

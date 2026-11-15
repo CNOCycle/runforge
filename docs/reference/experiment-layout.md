@@ -83,7 +83,7 @@ See [Matrices and mapping](../guides/matrices-and-mapping.md).
 | `stdout.log`, `stderr.log` | Worker | Replaced per attempt |
 | `artifacts/` | The child command | Yes |
 | `.workspace/` | Worker, for Git and snapshot execution | Normally created and removed per execution |
-| `claim/` | Worker, while executing | Created and removed |
+| `claim/` | Worker, retry preparation, or scheduling edit | Created and removed |
 | `attempt-NNNN/` | Retry | Written once per attempt; a retry after a failure before the command started adds `-1`, `-2`, ... |
 
 The immutable files are the experiment's identity. A worker verifies every
@@ -107,7 +107,7 @@ created -> init -> inprogress -> completed
 | `failed` | Command exited non-zero, or preparation failed |
 
 `created` and `init` are runnable. `inprogress` with no live worker or child process requires
-`retry --force`; see
+`retry --force` preparation followed by `run` execution; see
 [Workers and recovery](../guides/workers-and-recovery.md).
 
 ## Claim Files

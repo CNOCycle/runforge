@@ -11,7 +11,8 @@ import pytest
 import runforge.execution.retry as retry_module
 import runforge.execution.worker as worker_module
 from runforge.execution.discovery import discover_paths
-from runforge.execution.errors import ExperimentHeldError, WorkerError
+from runforge.execution.errors import ExperimentHeldError
+from runforge.execution.retry import RetryError, prepare_retries
 from runforge.execution.scheduling import SchedulingError, set_hold
 from runforge.execution.worker import BatchRequest, execute_paths, run_experiment, run_worker
 from runforge.infrastructure.claims import release_claim, try_acquire_claim
@@ -23,6 +24,7 @@ from tests.support import create_git_repository
 
 THREE_TASKS = 3
 COMPLETION_QUOTA = 2
+CHILD_FAILURE = 7
 SECOND_ATTEMPT = 2
 CLI_ERROR_EXIT = 2
 
@@ -161,21 +163,25 @@ def test_forced_root_retry_is_rejected_before_archiving_or_clearing_claims(tmp_p
     run_experiment(experiment)
     before = (experiment / "status.json").read_bytes()
 
-    with pytest.raises(WorkerError, match="explicit experiment-directory"):
-        execute_paths(BatchRequest((tmp_path / "reports",), retry=True, force=True))
+    with pytest.raises(RetryError, match="explicit experiment-directory"):
+        prepare_retries((tmp_path / "reports",), force=True)
 
     assert (experiment / "status.json").read_bytes() == before
     assert not list(experiment.glob("attempt-*"))
 
 
-def test_retry_prepares_and_executes_under_one_claim_and_preserves_history(tmp_path):
+def test_retry_prepares_then_run_acquires_another_claim_and_preserves_history(tmp_path):
     repository = create_git_repository(tmp_path / "repository", {"train.py": "raise SystemExit(7)\n"})
     experiment = _plan(tmp_path, repository, "failed")
     run_experiment(experiment)
 
-    result = execute_paths(BatchRequest((experiment,), retry=True))
+    result = prepare_retries((experiment,))
 
-    assert result.failed == 1
+    assert result.prepared == 1
+    assert ExperimentDirectory.resolve(experiment).load_status().state == "init"
+    assert ExperimentDirectory.resolve(experiment).load_status().attempt == 1
+    assert not (experiment / "claim").exists()
+    assert run_experiment(experiment) == CHILD_FAILURE
     assert (experiment / "attempt-0001" / "status.snapshot.json").exists()
     assert ExperimentDirectory.resolve(experiment).load_status().attempt == SECOND_ATTEMPT
     assert not (experiment / "claim").exists()
@@ -204,10 +210,10 @@ def test_completed_retry_is_skipped_without_archiving(tmp_path):
     layout = ExperimentDirectory.resolve(experiment)
     layout.save_status(replace(layout.load_status(), state="completed"))
 
-    result = execute_paths(BatchRequest((experiment,), retry=True))
+    result = prepare_retries((experiment,))
 
-    assert result.selected == 0
-    assert result.not_runnable == 1
+    assert result.prepared == 0
+    assert result.outcomes[0].outcome == "non-runnable"
     assert not list(experiment.glob("attempt-*"))
 
 
@@ -224,10 +230,10 @@ def test_retry_skips_a_peer_result_changed_after_discovery_before_claim(tmp_path
 
     monkeypatch.setattr(retry_module, "try_acquire_claim", peer_completes_before_claim)
 
-    result = execute_paths(BatchRequest((experiment,), retry=True))
+    result = prepare_retries((experiment,))
 
-    assert result.stale_skipped == 1
-    assert result.failed == 0
+    assert result.outcomes[0].outcome == "stale"
+    assert result.prepared == 0
     assert layout.load_status().attempt == 1
     assert not list(experiment.glob("attempt-*"))
     assert not layout.claim.exists()
@@ -257,7 +263,7 @@ def test_retry_claim_error_with_unreadable_status_does_not_abort_other_work(tmp_
     following = _plan(tmp_path, repository, "b-following")
     run_experiment(broken)
     run_experiment(following)
-    acquire = worker_module.acquire_retry_claim
+    acquire = retry_module.acquire_retry_claim
 
     def corrupt_status_before_error(layout, *, force=False):
         if layout.root == broken:
@@ -265,13 +271,14 @@ def test_retry_claim_error_with_unreadable_status_does_not_abort_other_work(tmp_
             raise retry_module.RetryError("could not prepare retry claim")
         return acquire(layout, force=force)
 
-    monkeypatch.setattr(worker_module, "acquire_retry_claim", corrupt_status_before_error)
+    monkeypatch.setattr(retry_module, "acquire_retry_claim", corrupt_status_before_error)
 
-    result = execute_paths(BatchRequest((tmp_path / "reports",), retry=True))
+    result = prepare_retries((tmp_path / "reports",))
 
     assert result.invalid == 1
-    assert result.failed == result.selected == 1
-    assert ExperimentDirectory.resolve(following).load_status().attempt == SECOND_ATTEMPT
+    assert result.prepared == 1
+    assert ExperimentDirectory.resolve(following).load_status().state == "init"
+    assert ExperimentDirectory.resolve(following).load_status().attempt == 1
     assert not list(broken.glob("attempt-*"))
 
 

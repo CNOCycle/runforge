@@ -57,15 +57,16 @@ An abrupt kill can bypass Python cleanup, leaving the experiment's `.workspace/`
 workdir, claim, and inprogress status. There is no process reattachment, checkpoint selection,
 liveness lease, or automatic recovery. Explicit forced retry requires independent
 operator confirmation; it is not a guarantee against a still-live prior child.
-Previous attempt history is archived before another attempt begins. Normal retry
-preparation and execution share claim ownership.
+Previous attempt history is archived before another attempt begins. Retry only prepares another attempt, publishes init last, and releases its claim.
+Run later acquires a separate claim and executes it. Retry batch selection is
+fixed and does not refill; execution keeps the lazy refill behavior above.
 
 Opt-in retry --reuse-artifacts copies the preceding artifact tree into owned
 hidden staging before moving outputs, publishes a complete independent seed,
 then resets status last. Caught preparation failures restore the previous layout;
 interrupted staging or archive conflicts require manual inspection. Applications
 own checkpoint loading; RunForge does not change the recorded command or restore
-an old process. Ordinary retry still starts with empty artifacts.
+an old process. Ordinary retry prepares empty artifacts; run needs no artifact-reuse option.
 
 The workdir lives at `.workspace/` inside the experiment, so the claim that
 grants execution also grants ownership of that path. The next claimed execution

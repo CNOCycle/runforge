@@ -10,6 +10,7 @@ import pytest
 
 import runforge.execution.sources as sources_module
 import runforge.execution.worker as worker_module
+from runforge.execution.retry import prepare_retries
 from runforge.execution.worker import BatchRequest, WorkerError, WorkerProgressEvent, execute_paths, run_experiment
 from runforge.infrastructure.claims import ClaimError, release_claim, try_acquire_claim
 from runforge.infrastructure.json_store import load_json_object
@@ -257,7 +258,8 @@ def test_worker_refuses_a_locked_leftover_worktree_without_touching_it(tmp_path,
 
     # Once the operator unlocks it, an ordinary retry replaces the leftover.
     git(repository, "worktree", "unlock", str(workspace))
-    result = execute_paths(BatchRequest((experiment,), retry=True))
+    assert prepare_retries((experiment,)).prepared == 1
+    result = execute_paths(BatchRequest((experiment,)))
     assert result.completed == 1
     assert "keep.txt" not in _listing(experiment)
 
@@ -881,10 +883,11 @@ def test_repeated_retries_of_an_experiment_that_fails_before_starting_each_get_a
     monkeypatch.setattr(worker_module, "verify_planned_inputs", reject_inputs)
 
     first = execute_paths(BatchRequest((experiment.root,)))
-    second = execute_paths(BatchRequest((experiment.root,), retry=True))
-    third = execute_paths(BatchRequest((experiment.root,), retry=True))
+    assert prepare_retries((experiment.root,)).prepared == 1
+    second = execute_paths(BatchRequest((experiment.root,)))
+    assert prepare_retries((experiment.root,)).prepared == 1
+    third = execute_paths(BatchRequest((experiment.root,)))
 
     assert (first.failed, second.failed, third.failed) == (1, 1, 1)
     assert (second.invalid, third.invalid) == (0, 0)
     assert len(list(experiment.root.glob("attempt-*"))) == RETRIES_AFTER_PRESTART_FAILURE
-

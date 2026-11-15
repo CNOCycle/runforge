@@ -53,8 +53,11 @@ secrets.
    it started have stopped; a job record alone does not establish that every
    child has stopped.
 4. For a failed or `inprogress` experiment, run
-   `runforge retry --force EXPERIMENT_DIR`. Forced retry does not clear a claim
-   on a `created` or `init` experiment; preserve that record and investigate.
+   `runforge retry --force EXPERIMENT_DIR` to prepare it without execution.
+   Add `--reuse-artifacts` for application checkpoint recovery. Inspect its result,
+   then use `runforge run EXPERIMENT_DIR` on the destination worker with the same
+   report storage. Forced retry does not clear a claim on a `created` or `init`
+   experiment; preserve that record and investigate.
 
 Step 3, confirming both worker and child have stopped, is the one that matters. `--force` is an escape hatch, not a concurrency
 guarantee: using it while the original process still runs can execute the

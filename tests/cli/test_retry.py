@@ -49,7 +49,7 @@ def _plan(repository: Path, reports: Path, environment_file: Path, capsys) -> Pa
     return planned_path(capsys.readouterr().out)
 
 
-def test_retry_archives_failed_attempt_and_executes_with_aggregate_status(tmp_path, capsys):
+def test_retry_archives_without_execution_then_run_executes(tmp_path, capsys):
     marker = tmp_path / "attempt.marker"
     repository = _repository(
         tmp_path,
@@ -81,22 +81,26 @@ def test_retry_archives_failed_attempt_and_executes_with_aggregate_status(tmp_pa
     assert "  max tasks: unlimited" in first.out
     assert "very-secret" not in first.out + first.err
 
-    assert main(["retry", "-s", str(experiment)]) == 0
+    assert main(["retry", str(experiment)]) == 0
 
     captured = capsys.readouterr()
     archive = experiment / "attempt-0001"
     assert captured.err == ""
-    assert "retry succeeded" in captured.out
+    assert "retry succeeded" not in captured.out
     assert "very-secret" not in captured.out + captured.err
-    assert "  environment keys: API_TOKEN, MARKER" in captured.out
-    assert f"  artifact directory: {experiment / 'artifacts'}" in captured.out
-    assert "  attempt: 2" in captured.out
-    assert "current attempt:" not in captured.out
-    assert "next attempt:" not in captured.out
+    assert "Executing command" not in captured.out
+    assert "  prepared: 1" in captured.out
     assert "  force: disabled" in captured.out
     assert "  max tasks:" not in captured.out
-    assert captured.out.index("  attempt: 2") < captured.out.index("Executing command")
-    assert captured.out.index("Executing command") < captured.out.index("retry succeeded")
+    assert _status(experiment).state == "init"
+    assert _status(experiment).attempt == 1
+    assert not (experiment / "stdout.log").exists()
+    assert list((experiment / "artifacts").iterdir()) == []
+    assert main(["run", "-s", str(experiment)]) == 0
+    executed = capsys.readouterr()
+    assert "retry succeeded" in executed.out
+    assert "very-secret" not in executed.out + executed.err
+    assert executed.out.index("Executing command") < executed.out.index("retry succeeded")
     assert (archive / "status.snapshot.json").exists()
     assert (archive / "stdout.log").read_text() == "first attempt failed\n"
     assert (archive / "artifacts" / "partial.txt").read_text() == "partial"
@@ -113,10 +117,11 @@ def test_retry_force_on_an_unclaimed_failed_experiment_does_not_warn(tmp_path, c
     assert main(["run", str(experiment)]) == 1
     capsys.readouterr()
 
-    assert main(["retry", "-f", str(experiment)]) == 1
+    assert main(["retry", "-f", str(experiment)]) == 0
 
     assert "cannot prove" not in capsys.readouterr().err
-    assert _status(experiment).attempt == SECOND_ATTEMPT
+    assert _status(experiment).state == "init"
+    assert _status(experiment).attempt == 1
 
 
 def test_retry_skips_inprogress_without_force_and_preserves_prior_attempt(tmp_path, capsys):
@@ -138,7 +143,9 @@ def test_retry_skips_inprogress_without_force_and_preserves_prior_attempt(tmp_pa
     assert main(["retry", "-f", str(experiment)]) == 0
 
     assert "cannot prove that the previous worker has stopped" in capsys.readouterr().err
-    assert _status(experiment).state == "completed"
+    assert _status(experiment).state == "init"
+    assert _status(experiment).attempt == ACTIVE_ATTEMPT
+    assert main(["run", str(experiment)]) == 0
     assert _status(experiment).attempt == RETRIED_ACTIVE_ATTEMPT
     assert (experiment / "attempt-0002" / "stdout.log").read_text() == "partial output\n"
 
@@ -178,8 +185,7 @@ def test_retry_archive_collision_is_invalid_work_without_a_new_attempt(tmp_path,
 
     captured = capsys.readouterr()
     assert "Retry archive already exists" in captured.err
-    assert "  selected: 0" in captured.out
-    assert "  failed: 0" in captured.out
+    assert "  prepared: 0" in captured.out
     assert "  invalid: 1" in captured.out
     assert _status(experiment).state == "failed"
     assert _status(experiment).attempt == 1

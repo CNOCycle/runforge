@@ -107,9 +107,12 @@ sequenceDiagram
         User->>CLI: runforge retry EXPERIMENT
         CLI->>Retry: validate state and claim
         Retry->>Report: archive prior attempt and reset state
-        CLI->>Executor: execute the next attempt
-        Executor->>Report: update status, logs, artifacts
-        Report-->>User: exit code
+        Retry->>Report: release preparation claim; experiment is runnable
+        Report-->>User: preparation summary (no execution)
+        User->>CLI: runforge run EXPERIMENT
+        CLI->>Worker: claim and execute prepared experiment
+        Worker->>Report: update status, logs, artifacts
+        Report-->>User: execution exit code
     end
 ```
 

@@ -9,7 +9,7 @@ Verified-directory commands run in the original source directory. Keep reports
 and any checkpoints on persistent storage if they must survive container
 replacement.
 
-run, retry, and launch automatically check existing inprogress or claimed
+run and launch automatically check existing inprogress or claimed
 experiments found in their initial selection, before starting any new attempt.
 Each claim is assessed from local evidence:
 
@@ -80,41 +80,87 @@ Once both the former worker and child are confirmed stopped, name each affected
 experiment explicitly:
 
 ```bash
-runforge retry --force --stream-output "$EXPERIMENT"
+runforge retry --force "$EXPERIMENT"
 runforge retry --force "$EXPERIMENT_A" "$EXPERIMENT_B"
 ```
 
 This recovers failed or inprogress experiments, clears any previous claim, and
-archives their previous attempt before starting a new one. Forced root-wide
+archives their previous attempt, prepares artifacts, and publishes `init` without
+starting the command. Forced root-wide
 recovery is refused; runforge retry --force must receive experiment directories.
 For an interrupted created/init record that still has a claim, forced retry is
 not supported: it skips that state without clearing the claim. Preserve the
 record and investigate that claim separately; do not label it failed just to
 make retry accept it.
 
-Retry starts the recorded command as a new attempt. For Git and snapshot sources
-it deletes any `.workspace/` the interrupted run left and builds a fresh one;
-the old workdir is never reused. Verified-directory sources execute in the
-original directory. Retry does not resume the old process. Ordinary retry moves saved outputs into
-attempt-NNNN and starts with empty artifacts. To make previous artifacts available
-at their usual paths for an application that already supports checkpoint recovery,
-use [retry --reuse-artifacts](#reuse-artifacts-for-application-checkpoint-recovery).
-It can be combined with --force after the same independent ownership check.
-
-Copy anything you need out of a leftover `.workspace/` before retrying; retry
-deletes it. Then inspect the durable report again:
+After checking the preparation summary, use run to execute the prepared work:
 
 ```bash
-runforge discover "$REPORT_ROOT"
-runforge run "$REPORT_ROOT"
+runforge run --stream-output "$EXPERIMENT_A" "$EXPERIMENT_B"
 ```
+
+Run starts the recorded command as a new attempt. For Git and snapshot sources
+it deletes any `.workspace/` left by an interrupted run and builds a fresh one;
+the old workdir is never reused. Verified-directory sources execute in the
+original directory. Copy anything needed out of a leftover workdir before run;
+retry itself does not remove it or launch a process.
+
+Ordinary retry moves saved outputs into attempt-NNNN and prepares empty
+artifacts. To retain checkpoints at their usual paths, use
+[retry --reuse-artifacts](#reuse-artifacts-for-application-checkpoint-recovery).
+It combines with force after the same independent ownership check. The command
+must already support checkpoint loading.
+
+### Bulk recovery and cluster handoff
+
+Save the affected experiment paths before clearing the failed node's claim
+metadata. Verify through the cluster scheduler/host evidence that both its old
+workers and children stopped. On the recovery machine, prepare the complete
+selection in one command:
+
+```bash
+runforge retry --force --reuse-artifacts "$EXPERIMENT_A" "$EXPERIMENT_B" "$EXPERIMENT_C"
+```
+
+Retry never waits for a task to finish executing before preparing another. Each
+success becomes runnable as soon as its preparation claim is released. Ordinary
+retry prepares empty artifacts; omit reuse for a fresh start. Force still accepts
+only experiment directories, including multiple leaves from a quoted pattern;
+it rejects a report-root argument before modifying any task.
+
+Inspect the summary and any errors before starting a worker. Exit 0 means
+preparation or skips, not task completion; exit 2 means at least one error and
+successful earlier preparations remain queued. On the destination node, with the
+same report storage available, consume the chosen selection:
+
+```bash
+runforge run --stream-output "$EXPERIMENT_A" "$EXPERIMENT_B" "$EXPERIMENT_C"
+```
+
+The persisted runnable experiment records form the queue. Run needs no force or
+reuse flag: preparation already made those decisions. The default worker
+executes sequentially; multiple workers can consume the same selection through
+claims. A running invocation may not revisit a task it already attempted or
+contended, so start a new destination worker for recovery.
+
+Requeueing does not reserve tasks for a node. Existing workers scanning the same
+report root may consume them while retry is still preparing the batch. Stop or
+otherwise control competing workers when exclusive destination placement is
+required. This workflow does not add automatic owner selection, node affinity,
+remote launch, or a cluster queue service.
+
+Retry is preparation-only now. Update scripts that expected immediate execution
+to check its result and invoke run explicitly, and move retry streaming options
+to run. Retrying an already-prepared init experiment skips it without replacing
+its artifacts or creating another archive, even when flags differ.
 
 ## Interruptible machines
 
 An interruptible machine, such as a discounted rental node, can be stopped at
 any time and started again later. `runforge onstart` is the entry point to run
-each time such a machine starts, once the plans are published. It restarts the
-experiments the interruption cut off, then processes the remaining plans:
+each time such a machine starts, once the plans are published. It first prepares all eligible
+experiments the interruption cut off, then executes prepared and other runnable
+plans through the ordinary path-ordered queue:
 
 ```bash
 runforge onstart --single-node "$REPORT_ROOT"
@@ -151,9 +197,10 @@ a trace that `onstart` can read.
    as stale, unless the experiment is held: a scheduling hold takes precedence,
    so it is listed and left alone until its hold is removed. For each one it clears
    the claim, archives the interrupted attempt
-   (status, logs, and artifacts) under `attempt-NNNN`, and starts a new attempt
-   with the same recorded command and configuration. The archived artifacts are
-   copied back to `RUNFORGE_ARTIFACT_DIR`.
+   (status, logs, and artifacts) under `attempt-NNNN`, copies the archived
+   artifacts back to `RUNFORGE_ARTIFACT_DIR`, and publishes init. All preparations
+   finish before onstart begins ordinary execution of the report root, with the
+   same recorded commands and configurations.
 4. **Your program continues the task.** It finds its checkpoint in
    `RUNFORGE_ARTIFACT_DIR` and picks up from there. RunForge started the
    command again; carrying on from the checkpoint is the program's job.
@@ -355,9 +402,9 @@ runforge retry --force "$EXPERIMENT"
 ```
 
 Retry archives previous status as status.snapshot.json and moves logs/artifacts
-into attempt-NNNN before making another attempt. Archive errors abort without
+into attempt-NNNN before publishing init for another attempt. Archive errors abort without
 silently losing history. Retry preparation errors count as invalid work (exit 2),
-with no selected or failed execution added. The same immutable configuration is executed anew;
+without executing a command. Run executes the same immutable configuration later;
 checkpoints are application-specific, not automatically selected by RunForge.
 A held experiment must be released before retrying.
 
@@ -370,8 +417,8 @@ other ineligible states are skipped; failed attempts are retried once per
 invocation, not repeatedly until they succeed.
 
 A claimed failed experiment named explicitly is skipped with its recorded owner
-and force-recovery guidance. The skip still returns 0; it does not prove a retry
-ran. Confirm that the old worker and child stopped before using --force.
+and force-recovery guidance. The skip still returns 0; it does not prove another attempt
+was prepared or executed. Confirm that the old worker and child stopped before using --force.
 
 ## Reuse artifacts for application checkpoint recovery
 
@@ -385,7 +432,8 @@ runforge retry --reuse-artifacts "$REPORT_ROOT"
 ```
 
 The root form retries each eligible failed experiment using its own previous
-artifacts. Only run the example that matches your intended retry. Reuse remains
+artifacts. Only run the example that matches your intended retry, then use run
+after checking preparation results. Reuse remains
 subject to holds, claims, and eligible states. For a confirmed interrupted worker,
 both flags are needed to override ownership and reuse its outputs:
 
@@ -408,7 +456,7 @@ worth of disk space; elapsed time depends on bytes, file count, and storage
 throughput. No performance measurements are promised. The whole tree is copied,
 including files unrelated to checkpoints. Regular files and directories are
 supported; symbolic links and special files are rejected. Missing artifacts are
-a preparation error. Ordinary retry keeps its existing fresh-output behavior.
+a preparation error. Ordinary retry prepares fresh artifacts.
 
 Preparation checks and copies the tree in a hidden .attempt-NNNN.tmp-* directory
 before moving old outputs. It publishes only a complete seed, then resets status
@@ -438,7 +486,8 @@ deletes it while holding the experiment's claim and builds a fresh one; a
 symbolic link there is removed without following it. A Git worktree left
 locked with `git worktree lock` is treated as a deliberate hold: the execution
 fails, naming the path, and leaves the directory and lock untouched. Inspect
-it, run `git worktree unlock PATH` in the source repository, then retry.
+it, run `git worktree unlock PATH` in the source repository, then prepare with
+retry and execute with run.
 A command that deletes its own workdir, or a worktree creation that Git
 registers before failing (such as a failing `post-checkout` hook), is still
 removed and deregistered afterwards.

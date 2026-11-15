@@ -94,8 +94,13 @@ def build_parser() -> argparse.ArgumentParser:
     for name in ("run", "retry"):
         leaf = leaves.add_parser(
             name,
-            help="execute eligible experiments" if name == "run" else "archive and retry failed experiments",
-            epilog=_WORKDIR_HELP,
+            help="execute eligible experiments" if name == "run" else "prepare another attempt without executing it",
+            epilog=(
+                _WORKDIR_HELP
+                if name == "run"
+                else "Archives the previous attempt and queues another for runforge run. "
+                "Success means preparation, not task completion."
+            ),
             formatter_class=SemanticDefaultsHelpFormatter,
         )
         leaf.add_argument(
@@ -105,16 +110,9 @@ def build_parser() -> argparse.ArgumentParser:
             metavar="PATH",
             help="experiment or report-root paths, or quoted wildcard patterns",
         )
-        _add_stream_output_argument(leaf)
-        leaf.set_defaults(
-            handler=commands.run,
-            command_name=name,
-            retry=name == "retry",
-            force=False,
-            max_tasks=None,
-            reuse_artifacts=False,
-        )
+        leaf.set_defaults(handler=commands.run if name == "run" else commands.retry, command_name=name)
         if name == "run":
+            _add_stream_output_argument(leaf)
             leaf.add_argument(
                 "-n",
                 "--max-tasks",
@@ -132,7 +130,10 @@ def build_parser() -> argparse.ArgumentParser:
                 "-f",
                 "--force",
                 action="store_true",
-                help="retry explicit experiment paths after confirming the old process stopped (default: disabled)",
+                help=(
+                    "prepare explicit experiment paths after confirming the old worker and child stopped "
+                    "(default: disabled)"
+                ),
             )
     leaf = leaves.add_parser(
         "onstart",
@@ -143,8 +144,8 @@ def build_parser() -> argparse.ArgumentParser:
             "'runforge run PATH'. WARNING: your program must be resumable. RunForge restarts the recorded command "
             "and restores the previous artifacts to RUNFORGE_ARTIFACT_DIR but does not resume the process. "
             "WARNING: the restarts are forced, which is only safe on one machine that has just started while no "
-            "other machine works on this report root; a forced retry of an experiment that is still running starts "
-            "it a second time. Pass --single-node to confirm."
+            "other machine works on this report root; preparing live work can race its old worker and child. "
+            "Pass --single-node to confirm."
         ),
         epilog=_WORKDIR_HELP,
         formatter_class=SemanticDefaultsHelpFormatter,

@@ -65,7 +65,10 @@ def test_run_pattern_executes_only_the_matching_group(reports, capsys):
 def test_retry_pattern_retries_only_the_matching_failed_group(reports, capsys):
     assert main(["run", str(reports)]) == 1
     capsys.readouterr()
-    assert main(["retry", str(reports / "**" / "*baseline*")]) == 1
+    assert main(["retry", str(reports / "**" / "*baseline*")]) == 0
+    assert f"prepared: {GROUP_SIZE}" in capsys.readouterr().out
+    _expect(_attempts(reports, capsys), baseline=1, ablation=1, control=1)
+    assert main(["run", str(reports / "**" / "*baseline*")]) == 1
     capsys.readouterr()
     _expect(_attempts(reports, capsys), baseline=2, ablation=1, control=1)
 
@@ -73,7 +76,9 @@ def test_retry_pattern_retries_only_the_matching_failed_group(reports, capsys):
 def test_forced_retry_accepts_a_pattern_and_keeps_its_directory_check(reports, capsys):
     assert main(["run", str(reports)]) == 1
     capsys.readouterr()
-    assert main(["retry", "--force", str(reports / "**" / "*ablation*")]) == 1
+    assert main(["retry", "--force", str(reports / "**" / "*ablation*")]) == 0
+    assert f"prepared: {GROUP_SIZE}" in capsys.readouterr().out
+    assert main(["run", str(reports / "**" / "*ablation*")]) == 1
     capsys.readouterr()
     _expect(_attempts(reports, capsys), baseline=1, ablation=2, control=1)
     assert main(["retry", "--force", str(reports / "**")]) == CLI_ERROR
